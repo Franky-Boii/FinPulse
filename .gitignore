@@ -1,0 +1,20 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+# dbt
+dbt/finpulse/target/
+dbt/finpulse/dbt_packages/
+dbt/finpulse/logs/
+
+# airflow
+airflow/logs/
+airflow/*.db
+
+# spark checkpoints (local dev)
+streaming/checkpoints/
+
+# editors
+.vscode/
+.idea/
