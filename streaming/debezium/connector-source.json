@@ -1,0 +1,23 @@
+{
+  "name": "finpulse-source-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres-source",
+    "database.port": "5432",
+    "database.user": "finpulse",
+    "database.password": "finpulse",
+    "database.dbname": "ecommerce",
+    "topic.prefix": "finpulse",
+    "plugin.name": "pgoutput",
+    "publication.name": "finpulse_publication",
+    "slot.name": "finpulse_slot",
+    "table.include.list": "public.customers,public.products,public.orders,public.order_items,public.payments",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false",
+    "tombstones.on.delete": "false",
+    "decimal.handling.mode": "double",
+    "snapshot.mode": "initial"
+  }
+}
