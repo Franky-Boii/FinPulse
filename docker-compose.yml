@@ -1,0 +1,246 @@
+name: finpulse
+
+x-airflow-common: &airflow-common
+  build:
+    context: ./airflow
+    dockerfile: Dockerfile
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: utc
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    FINPULSE_SOURCE_DB_URI: postgresql+psycopg2://finpulse:finpulse@postgres-source:5432/ecommerce
+    FINPULSE_WAREHOUSE_DB_URI: postgresql+psycopg2://finpulse:finpulse@postgres-warehouse:5432/warehouse
+    DBT_PROFILES_DIR: /opt/dbt
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/plugins:/opt/airflow/plugins
+    - airflow_logs:/opt/airflow/logs
+    - ./dbt:/opt/dbt
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+    postgres-source:
+      condition: service_healthy
+    postgres-warehouse:
+      condition: service_healthy
+
+services:
+  # ---------------------------------------------------------------
+  # SOURCE OF TRUTH — OLTP database for the e-commerce application
+  # ---------------------------------------------------------------
+  postgres-source:
+    image: postgres:16
+    container_name: finpulse-postgres-source
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_replication_slots=10", "-c", "max_wal_senders=10"]
+    environment:
+      POSTGRES_USER: finpulse
+      POSTGRES_PASSWORD: finpulse
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_source_data:/var/lib/postgresql/data
+      - ./docker/init-source-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finpulse -d ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------
+  # WAREHOUSE — analytical store dbt builds into (batch layer output)
+  # also hosts the `realtime` schema the Spark job writes to
+  # ---------------------------------------------------------------
+  postgres-warehouse:
+    image: postgres:16
+    container_name: finpulse-postgres-warehouse
+    environment:
+      POSTGRES_USER: finpulse
+      POSTGRES_PASSWORD: finpulse
+      POSTGRES_DB: warehouse
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_warehouse_data:/var/lib/postgresql/data
+      - ./docker/init-warehouse-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finpulse -d warehouse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------
+  # Airflow's own metadata database
+  # ---------------------------------------------------------------
+  postgres-airflow:
+    image: postgres:16
+    container_name: finpulse-postgres-airflow
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - pg_airflow_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------
+  # Order generator — simulates live traffic on the OLTP database
+  # ---------------------------------------------------------------
+  order-generator:
+    build:
+      context: ./services/order_generator
+    container_name: finpulse-order-generator
+    environment:
+      DB_URI: postgresql://finpulse:finpulse@postgres-source:5432/ecommerce
+      EVENTS_PER_MINUTE: "120"
+    depends_on:
+      postgres-source:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------
+  # Redpanda — Kafka-API-compatible broker (speed layer transport)
+  # ---------------------------------------------------------------
+  redpanda:
+    image: redpandadata/redpanda:v24.2.4
+    container_name: finpulse-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:9092
+      - --pandaproxy-addr=0.0.0.0:8082
+      - --advertise-pandaproxy-addr=localhost:8082
+    ports:
+      - "9092:9092"
+      - "8082:8082"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redpanda-console:
+    image: redpandadata/console:v2.7.2
+    container_name: finpulse-redpanda-console
+    environment:
+      KAFKA_BROKERS: redpanda:29092
+    ports:
+      - "8085:8080"
+    depends_on:
+      - redpanda
+
+  # ---------------------------------------------------------------
+  # Debezium — CDC connector runtime (Kafka Connect)
+  # ---------------------------------------------------------------
+  debezium:
+    image: debezium/connect:2.7
+    container_name: finpulse-debezium
+    environment:
+      BOOTSTRAP_SERVERS: redpanda:29092
+      GROUP_ID: finpulse-connect
+      CONFIG_STORAGE_TOPIC: _finpulse_connect_configs
+      OFFSET_STORAGE_TOPIC: _finpulse_connect_offsets
+      STATUS_STORAGE_TOPIC: _finpulse_connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "8083:8083"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres-source:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------
+  # Spark Structured Streaming — speed layer compute
+  # ---------------------------------------------------------------
+  spark-stream:
+    build:
+      context: ./streaming
+    container_name: finpulse-spark-stream
+    environment:
+      KAFKA_BOOTSTRAP: redpanda:29092
+      REDIS_HOST: redis
+      WAREHOUSE_DB_URI: postgresql://finpulse:finpulse@postgres-warehouse:5432/warehouse
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      postgres-warehouse:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: finpulse-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  # ---------------------------------------------------------------
+  # Airflow — orchestration for the batch layer
+  # ---------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    container_name: finpulse-airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - "airflow db migrate && airflow users create --username admin --password admin --firstname Franky --lastname CEO --role Admin --email admin@finpulse.local"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: finpulse-airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: finpulse-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------
+  # FastAPI — serving layer (batch + realtime + merged lambda view)
+  # ---------------------------------------------------------------
+  api:
+    build:
+      context: ./services/fastapi
+    container_name: finpulse-api
+    environment:
+      WAREHOUSE_DB_URI: postgresql://finpulse:finpulse@postgres-warehouse:5432/warehouse
+      REDIS_HOST: redis
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres-warehouse:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pg_source_data:
+  pg_warehouse_data:
+  pg_airflow_data:
+  redpanda_data:
+  redis_data:
+  airflow_logs:
