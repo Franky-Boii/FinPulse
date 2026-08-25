@@ -125,3 +125,50 @@ finpulse/
 
 ---
 
+## Running it locally
+
+**Prerequisites:** Docker + Docker Compose, ~6 GB RAM free for containers.
+
+```bash
+git clone <your-repo-url> finpulse
+cd finpulse
+cp .env.example .env
+
+make up                     # builds and starts all 12 services
+make register-connector     # registers the Debezium CDC connector (run once)
+```
+
+Give it 1–2 minutes for Airflow to initialize, then:
+
+- **Airflow UI** — http://localhost:8080 (admin/admin) — trigger
+  `finpulse_batch_etl` manually the first time rather than waiting for
+  the hourly schedule
+- **FastAPI docs** — http://localhost:8000/docs
+- **Redpanda Console** — http://localhost:8085 (watch CDC events flow)
+- **Source DB** — `psql -h localhost -p 5432 -U finpulse -d ecommerce`
+- **Warehouse DB** — `psql -h localhost -p 5433 -U finpulse -d warehouse`
+
+Within a few minutes of `make up`, the order generator will have
+created enough traffic for `/realtime/revenue` to return real numbers,
+and after the first Airflow DAG run, `/batch/daily-revenue` will too.
+
+See [`docs/RUNBOOK.md`](docs/RUNBOOK.md) for troubleshooting and
+[`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) for the full schema.
+
+---
+
+## The 5 V's of Big Data, in this project
+
+| V | How FinPulse addresses it |
+|---|---|
+| **Volume** | Designed to scale horizontally at every layer — Redpanda partitions, Spark executors, and Postgres are all independently scalable; the order-generator's rate is configurable to stress-test |
+| **Velocity** | The speed layer processes CDC events within a 15-second micro-batch trigger; end-to-end latency from "order placed" to "visible in `/realtime`" is under a minute |
+| **Variety** | Structured relational data now (orders/payments), but the CDC + Kafka-topic design means new event types (e.g. clickstream, support tickets) could be added as new topics without touching the existing pipeline |
+| **Veracity** | dbt tests enforce referential integrity, non-null constraints, and accepted-value checks on every batch run; the batch layer is the authoritative correction for anything the speed layer got wrong |
+| **Value** | The whole point of the split: the business gets both a trustworthy daily revenue number *and* a "what's happening right now" view, which is the actual value tradeoff a real analytics platform has to make |
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
