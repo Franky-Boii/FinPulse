@@ -1,0 +1,13 @@
+finpulse:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: postgres-warehouse
+      user: finpulse
+      password: finpulse
+      port: 5432
+      dbname: warehouse
+      schema: public
+      threads: 1
+      keepalives_idle: 0
