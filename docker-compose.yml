@@ -144,7 +144,7 @@ services:
   # Debezium — CDC connector runtime (Kafka Connect)
   # ---------------------------------------------------------------
   debezium:
-    image: debezium/connect:2.7
+    image: debezium/connect:2.7.3.Final
     container_name: finpulse-debezium
     environment:
       BOOTSTRAP_SERVERS: redpanda:29092
@@ -225,6 +225,7 @@ services:
   api:
     build:
       context: ./services/fastapi
+      dockerfile: app/Dockerfile
     container_name: finpulse-api
     environment:
       WAREHOUSE_DB_URI: postgresql://finpulse:finpulse@postgres-warehouse:5432/warehouse
