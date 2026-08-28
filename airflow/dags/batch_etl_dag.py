@@ -1,146 +1,301 @@
 """
-FinPulse — batch layer DAG.
+FinPulse — Batch Layer DAG
 
-This is the "batch layer" of the Lambda architecture: it periodically
-re-derives the complete, authoritative view of the business from the
-full history of source data. It is slower than the Spark speed layer
-but correct-by-construction — if the two ever disagree, the batch
-layer wins.
+The batch layer periodically rebuilds the authoritative analytical
+representation of the OLTP source.
 
-Steps:
-    1. extract_source_to_raw   — EL: full extract of the OLTP tables
-                                   into warehouse.raw (via SQLAlchemy
-                                   Core — see note below on why not
-                                   pandas.read_sql_table/to_sql)
-    2. dbt_seed                — load reference/lookup data
-    3. dbt_run                 — T: staging -> marts transformations
-    4. dbt_test                — data quality gate (schema + relationship
-                                   + accepted-value tests)
-    5. compact_realtime_layer  — dedupe the Spark speed layer's
-                                   append-only staging table into the
-                                   queryable realtime.revenue_by_minute
-                                   table (keeps the speed layer's own
-                                   storage from growing unbounded)
+Pipeline:
 
-Note on extract_source_to_raw: this deliberately avoids
-pandas.read_sql_table/to_sql. As of pandas 2.2.x there is an
-unresolved pandas bug (pandas-dev/pandas#57053) where its internal
-has_table() check crashes with "'Engine' object has no attribute
-'cursor'" on a live SQLAlchemy engine/connection, independent of the
-SQLAlchemy version installed. Using SQLAlchemy Core directly for the
-extract/load sidesteps that bug entirely and is arguably the more
-correct tool for an EL step anyway.
+    PostgreSQL OLTP
+          |
+          v
+    raw warehouse schema
+          |
+          v
+       dbt seed
+          |
+          v
+       dbt run
+          |
+          v
+      dbt test
+          |
+          v
+    realtime compaction
+
+The batch layer is intentionally simple in this version of FinPulse.
+
+The source tables are fully extracted into the raw schema on each run.
+This gives us a deterministic baseline that is easy to understand and
+debug.
+
+A future production-oriented iteration can replace the full extraction
+with an incremental/watermark-based strategy.
 """
 
 from __future__ import annotations
 
 import os
-import pendulum
-from sqlalchemy import create_engine, text, MetaData, Table, insert
 
+import pendulum
 from airflow.decorators import dag, task
 from airflow.operators.bash import BashOperator
+from sqlalchemy import MetaData, Table, create_engine, insert, text
+
 
 SOURCE_DB_URI = os.environ.get(
-    "FINPULSE_SOURCE_DB_URI", "postgresql+psycopg2://finpulse:finpulse@postgres-source:5432/ecommerce"
-)
-WAREHOUSE_DB_URI = os.environ.get(
-    "FINPULSE_WAREHOUSE_DB_URI", "postgresql+psycopg2://finpulse:finpulse@postgres-warehouse:5432/warehouse"
+    "FINPULSE_SOURCE_DB_URI",
+    "postgresql+psycopg2://finpulse:finpulse@postgres-source:5432/ecommerce",
 )
 
-SOURCE_TABLES = ["customers", "products", "orders", "order_items", "payments"]
+WAREHOUSE_DB_URI = os.environ.get(
+    "FINPULSE_WAREHOUSE_DB_URI",
+    "postgresql+psycopg2://finpulse:finpulse@postgres-warehouse:5432/warehouse",
+)
+
+SOURCE_TABLES = [
+    "customers",
+    "products",
+    "orders",
+    "order_items",
+    "payments",
+]
 
 DBT_PROJECT_DIR = "/opt/dbt/finpulse"
-DBT_PROFILES_DIR = "/opt/dbt"
+
+DBT_PROFILES_DIR = os.environ.get(
+    "DBT_PROFILES_DIR",
+    "/opt/dbt",
+)
 
 
 @dag(
     dag_id="finpulse_batch_etl",
-    description="Batch layer: extract OLTP -> raw, transform via dbt, test, compact realtime layer",
+    description=(
+        "FinPulse batch layer: "
+        "extract OLTP -> raw -> dbt -> tests -> realtime compaction"
+    ),
     schedule="@hourly",
-    start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
+    start_date=pendulum.datetime(
+        2026,
+        1,
+        1,
+        tz="UTC",
+    ),
     catchup=False,
-    tags=["finpulse", "batch", "lambda-architecture"],
+    tags=[
+        "finpulse",
+        "batch",
+        "etl",
+        "dbt",
+        "lambda-architecture",
+    ],
 )
 def finpulse_batch_etl():
 
     @task
     def extract_source_to_raw():
-        """Full-table extract from the OLTP source into warehouse.raw,
-        using SQLAlchemy Core directly (see module docstring for why
-        not pandas). A real production system would do this
-        incrementally (CDC-fed or watermark-based); a full extract
-        keeps the batch layer simple to reason about and is cheap at
-        this data volume."""
-        source_engine = create_engine(SOURCE_DB_URI)
-        warehouse_engine = create_engine(WAREHOUSE_DB_URI)
+        """
+        Perform a full extract of the OLTP source tables into
+        warehouse.raw.
 
-        source_meta = MetaData()
-        warehouse_meta = MetaData(schema="raw")
+        SQLAlchemy Core is used directly rather than pandas.read_sql_table
+        or pandas.to_sql.
 
-        row_counts = {}
-        with source_engine.connect() as src_conn, warehouse_engine.begin() as wh_conn:
-            for table_name in SOURCE_TABLES:
-                src_table = Table(
-                    table_name, source_meta, schema="public", autoload_with=source_engine
-                )
+        This also handles PostgreSQL generated columns correctly by
+        excluding computed columns from INSERT statements.
+        """
 
-                # Full-refresh EL: drop and recreate the raw copy each run.
-                wh_conn.execute(text(f'DROP TABLE IF EXISTS raw."{table_name}"'))
-                wh_table = src_table.to_metadata(warehouse_meta, schema="raw")
-                wh_table.create(bind=wh_conn)
+        source_engine = create_engine(
+            SOURCE_DB_URI,
+            pool_pre_ping=True,
+        )
 
-                # Generated/computed columns (e.g. order_items.line_total)
-                # can't be explicitly inserted into on Postgres — Postgres
-                # (re)computes them itself from the other column values.
-                insertable_cols = {c.name for c in wh_table.columns if c.computed is None}
+        warehouse_engine = create_engine(
+            WAREHOUSE_DB_URI,
+            pool_pre_ping=True,
+        )
 
-                rows = [
-                    {k: v for k, v in dict(row._mapping).items() if k in insertable_cols}
-                    for row in src_conn.execute(src_table.select())
-                ]
-                if rows:
-                    wh_conn.execute(insert(wh_table), rows)
-                row_counts[table_name] = len(rows)
+        source_metadata = MetaData()
+
+        row_counts: dict[str, int] = {}
+
+        try:
+            with source_engine.connect() as source_conn:
+                with warehouse_engine.begin() as warehouse_conn:
+
+                    for table_name in SOURCE_TABLES:
+
+                        source_table = Table(
+                            table_name,
+                            source_metadata,
+                            schema="public",
+                            autoload_with=source_engine,
+                        )
+
+                        # -------------------------------------------------
+                        # Drop the existing raw table.
+                        # -------------------------------------------------
+
+                        warehouse_conn.execute(
+                            text(
+                                f'DROP TABLE IF EXISTS raw."{table_name}"'
+                            )
+                        )
+
+                        # -------------------------------------------------
+                        # Recreate the raw table using the source schema.
+                        # -------------------------------------------------
+
+                        warehouse_metadata = MetaData(
+                            schema="raw"
+                        )
+
+                        warehouse_table = source_table.to_metadata(
+                            warehouse_metadata,
+                            schema="raw",
+                        )
+
+                        warehouse_table.create(
+                            bind=warehouse_conn
+                        )
+
+                        # -------------------------------------------------
+                        # Generated/computed columns must not be included
+                        # in INSERT statements.
+                        #
+                        # Example:
+                        #
+                        # order_items.line_total
+                        #
+                        # PostgreSQL calculates this automatically.
+                        # -------------------------------------------------
+
+                        insertable_columns = {
+                            column.name
+                            for column in warehouse_table.columns
+                            if column.computed is None
+                        }
+
+                        rows = []
+
+                        result = source_conn.execute(
+                            source_table.select()
+                        )
+
+                        for row in result:
+                            mapped_row = dict(row._mapping)
+
+                            filtered_row = {
+                                key: value
+                                for key, value in mapped_row.items()
+                                if key in insertable_columns
+                            }
+
+                            rows.append(filtered_row)
+
+                        # -------------------------------------------------
+                        # Bulk insert into raw.
+                        # -------------------------------------------------
+
+                        if rows:
+                            warehouse_conn.execute(
+                                insert(warehouse_table),
+                                rows,
+                            )
+
+                        row_counts[table_name] = len(rows)
+
+        finally:
+            source_engine.dispose()
+            warehouse_engine.dispose()
 
         return row_counts
 
     @task
     def compact_realtime_layer():
-        """Dedupe the Spark job's append-only staging landing table
-        down to one row per minute window in the queryable realtime
-        table, and truncate the staging table."""
-        engine = create_engine(WAREHOUSE_DB_URI)
-        with engine.begin() as conn:
-            conn.execute(text("""
-                INSERT INTO realtime.revenue_by_minute (window_start, order_count, revenue, updated_at)
-                SELECT DISTINCT ON (window_start)
-                    window_start, order_count, revenue, now()
-                FROM realtime.revenue_by_minute_staging
-                ORDER BY window_start, ingested_at DESC
-                ON CONFLICT (window_start) DO UPDATE
-                    SET order_count = EXCLUDED.order_count,
-                        revenue = EXCLUDED.revenue,
-                        updated_at = now()
-            """))
-            conn.execute(text("TRUNCATE realtime.revenue_by_minute_staging"))
+        """
+        Compact Spark's append-only revenue staging table.
+
+        The Spark streaming job writes multiple rows for a window.
+        This task keeps the queryable realtime table at one row per
+        minute window.
+        """
+
+        engine = create_engine(
+            WAREHOUSE_DB_URI,
+            pool_pre_ping=True,
+        )
+
+        try:
+            with engine.begin() as conn:
+
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO realtime.revenue_by_minute (
+                            window_start,
+                            order_count,
+                            revenue,
+                            updated_at
+                        )
+                        SELECT DISTINCT ON (window_start)
+                            window_start,
+                            order_count,
+                            revenue,
+                            NOW()
+                        FROM realtime.revenue_by_minute_staging
+                        ORDER BY
+                            window_start,
+                            ingested_at DESC
+
+                        ON CONFLICT (window_start)
+                        DO UPDATE SET
+                            order_count = EXCLUDED.order_count,
+                            revenue = EXCLUDED.revenue,
+                            updated_at = NOW()
+                        """
+                    )
+                )
+
+                conn.execute(
+                    text(
+                        """
+                        TRUNCATE TABLE
+                            realtime.revenue_by_minute_staging
+                        """
+                    )
+                )
+
+        finally:
+            engine.dispose()
 
     dbt_seed = BashOperator(
         task_id="dbt_seed",
-        bash_command=f"cd {DBT_PROJECT_DIR} && dbt seed --profiles-dir {DBT_PROFILES_DIR}",
+        bash_command=(
+            f"cd {DBT_PROJECT_DIR} && "
+            f"dbt seed --profiles-dir {DBT_PROFILES_DIR}"
+        ),
     )
 
     dbt_run = BashOperator(
         task_id="dbt_run",
-        bash_command=f"cd {DBT_PROJECT_DIR} && dbt run --profiles-dir {DBT_PROFILES_DIR}",
+        bash_command=(
+            f"cd {DBT_PROJECT_DIR} && "
+            f"dbt run --profiles-dir {DBT_PROFILES_DIR}"
+        ),
     )
 
     dbt_test = BashOperator(
         task_id="dbt_test",
-        bash_command=f"cd {DBT_PROJECT_DIR} && dbt test --profiles-dir {DBT_PROFILES_DIR}",
+        bash_command=(
+            f"cd {DBT_PROJECT_DIR} && "
+            f"dbt test --profiles-dir {DBT_PROFILES_DIR}"
+        ),
     )
 
     extracted = extract_source_to_raw()
+
     extracted >> dbt_seed >> dbt_run >> dbt_test >> compact_realtime_layer()
 
 
