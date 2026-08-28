@@ -330,20 +330,20 @@ services:
 
     container_name: finpulse-airflow-init
 
-    entrypoint:
-      - /bin/bash
-      - -c
+    entrypoint: /bin/bash
 
-    command: >
-      airflow db migrate &&
-      airflow users create
-      --username admin
-      --password admin
-      --firstname Fin
-      --lastname Pulse
-      --role Admin
-      --email admin@finpulse.local
-      || true
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Fin \
+          --lastname Pulse \
+          --role Admin \
+          --email admin@finpulse.local \
+          || true
 
 
   # ================================================================
