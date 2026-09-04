@@ -2,10 +2,10 @@
 -- FinPulse — Analytical Warehouse Initialization
 -- =====================================================================
 --
--- This database contains:
+-- Database layers:
 --
---   raw       -> extracted OLTP data
---   staging   -> dbt staging models
+--   raw       -> Airflow-extracted OLTP data
+--   staging   -> dbt-cleaned source models
 --   marts     -> dbt analytical models
 --   realtime  -> Spark Structured Streaming outputs
 --
@@ -17,22 +17,13 @@
 -- ---------------------------------------------------------------------
 
 CREATE SCHEMA IF NOT EXISTS raw;
-
 CREATE SCHEMA IF NOT EXISTS staging;
-
 CREATE SCHEMA IF NOT EXISTS marts;
-
 CREATE SCHEMA IF NOT EXISTS realtime;
 
 
 -- ---------------------------------------------------------------------
 -- REALTIME REVENUE STAGING
--- ---------------------------------------------------------------------
---
--- Spark writes append-only micro-batch results here.
--- Airflow periodically compacts this table into
--- realtime.revenue_by_minute.
---
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS realtime.revenue_by_minute_staging (
@@ -46,12 +37,6 @@ CREATE TABLE IF NOT EXISTS realtime.revenue_by_minute_staging (
 -- ---------------------------------------------------------------------
 -- REALTIME REVENUE
 -- ---------------------------------------------------------------------
---
--- One row per minute.
---
--- This is the queryable speed-layer table.
---
--- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS realtime.revenue_by_minute (
     window_start   TIMESTAMPTZ PRIMARY KEY,
@@ -63,13 +48,6 @@ CREATE TABLE IF NOT EXISTS realtime.revenue_by_minute (
 
 -- ---------------------------------------------------------------------
 -- REALTIME TOP PRODUCTS
--- ---------------------------------------------------------------------
---
--- Spark produces a rolling 5-minute product aggregation.
---
--- A composite primary key prevents duplicate rows for the same
--- product inside the same time window.
---
 -- ---------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS realtime.top_products_5min (
@@ -91,14 +69,11 @@ CREATE TABLE IF NOT EXISTS realtime.top_products_5min (
 CREATE INDEX IF NOT EXISTS idx_realtime_revenue_window
     ON realtime.revenue_by_minute (window_start DESC);
 
-
 CREATE INDEX IF NOT EXISTS idx_realtime_revenue_staging_window
     ON realtime.revenue_by_minute_staging (window_start DESC);
 
-
 CREATE INDEX IF NOT EXISTS idx_realtime_top_products_window
     ON realtime.top_products_5min (window_start DESC);
-
 
 CREATE INDEX IF NOT EXISTS idx_realtime_top_products_revenue
     ON realtime.top_products_5min (revenue DESC);
