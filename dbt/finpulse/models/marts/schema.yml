@@ -1,0 +1,105 @@
+version: 2
+
+models:
+
+  - name: dim_customers
+    description: "Analytics-ready customer dimension enriched with geographic region."
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+      - name: email
+        tests:
+          - not_null
+
+      - name: region
+        tests:
+          - not_null
+
+
+  - name: dim_products
+    description: "Analytics-ready product dimension."
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - unique
+
+      - name: product_name
+        tests:
+          - not_null
+
+
+  - name: fact_orders
+    description: "Order-level analytical fact table."
+    columns:
+      - name: order_id
+        tests:
+          - not_null
+          - unique
+
+      - name: customer_id
+        tests:
+          - not_null
+
+
+  - name: fact_payments
+    description: "Payment-level analytical fact table."
+    columns:
+      - name: payment_id
+        tests:
+          - not_null
+          - unique
+
+      - name: order_id
+        tests:
+          - not_null
+
+
+  - name: mart_daily_revenue
+    description: "Daily revenue and order performance metrics."
+    columns:
+      - name: order_date
+        tests:
+          - not_null
+          - unique
+
+      - name: order_count
+        tests:
+          - not_null
+
+      - name: revenue
+        tests:
+          - not_null
+
+
+  - name: mart_top_products
+    description: "Product sales performance aggregated across orders."
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - unique
+
+      - name: units_sold
+        tests:
+          - not_null
+
+      - name: revenue
+        tests:
+          - not_null
+
+
+  - name: mart_customer_metrics
+    description: "Customer-level purchasing metrics."
+    columns:
+      - name: customer_id
+        tests:
+          - not_null
+          - unique
+
+      - name: order_count
+        tests:
+          - not_null

@@ -1,9 +1,22 @@
 country,region
-US,North America
-CA,North America
-GB,Europe
-DE,Europe
-IN,Asia
-JP,Asia
-AU,Oceania
-BR,South America
+South Africa,Africa
+Nigeria,Africa
+Kenya,Africa
+Ghana,Africa
+Egypt,Africa
+Ireland,Europe
+United Kingdom,Europe
+Germany,Europe
+France,Europe
+Italy,Europe
+United States,North America
+Canada,North America
+Mexico,North America
+Brazil,South America
+Argentina,South America
+India,Asia
+Japan,Asia
+China,Asia
+Singapore,Asia
+Australia,Oceania
+New Zealand,Oceania
