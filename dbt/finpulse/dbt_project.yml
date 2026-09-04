@@ -31,6 +31,10 @@ models:
       +schema: marts
       +materialized: table
 
+    monitoring:
+      +schema: monitoring
+      +materialized: view
+
 seeds:
   finpulse:
     +schema: staging

@@ -1,0 +1,79 @@
+version: 2
+
+models:
+
+  # ================================================================
+  # SOURCE ROW COUNT MONITORING
+  # ================================================================
+
+  - name: source_row_counts
+    description: >
+      Monitoring model containing current row counts for all FinPulse
+      raw source tables.
+
+    columns:
+
+      - name: table_name
+        description: "Name of the monitored raw source table."
+        data_tests:
+          - not_null
+          - unique
+
+      - name: row_count
+        description: "Current number of rows in the source table."
+        data_tests:
+          - not_null
+
+      - name: checked_at
+        description: "Timestamp when the source row count was evaluated."
+        data_tests:
+          - not_null
+
+
+  # ================================================================
+  # SOURCE FRESHNESS MONITORING
+  # ================================================================
+
+  - name: source_freshness
+    description: >
+      Monitoring model that records the latest available timestamp
+      for each FinPulse raw source table and calculates the age of
+      the source data at the time of monitoring.
+
+    columns:
+
+      - name: table_name
+        description: "Name of the monitored raw source table."
+        data_tests:
+          - not_null
+          - unique
+
+      - name: table_type
+        description: >
+          Classification of the source table as either transactional
+          data or relatively static reference data.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values:
+                - transactional
+                - reference
+
+      - name: latest_source_timestamp
+        description: >
+          Most recent timestamp available in the monitored source table.
+        data_tests:
+          - not_null
+
+      - name: checked_at
+        description: >
+          Timestamp when source freshness was evaluated.
+        data_tests:
+          - not_null
+
+      - name: source_age
+        description: >
+          Time elapsed between the latest available source timestamp
+          and the time the freshness check was performed.
+        data_tests:
+          - not_null

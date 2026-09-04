@@ -26,11 +26,30 @@ Pipeline:
 The batch layer is intentionally simple in this version of FinPulse.
 
 The source tables are fully extracted into the raw schema on each run.
-This gives us a deterministic baseline that is easy to understand and
+This provides a deterministic baseline that is easy to understand and
 debug.
+
+The raw tables themselves are preserved between runs because downstream
+dbt staging and monitoring views depend on them. Existing raw data is
+TRUNCATED before each full reload.
 
 A future production-oriented iteration can replace the full extraction
 with an incremental/watermark-based strategy.
+
+Monitoring:
+
+    Airflow DAG
+          |
+          +--> SUCCESS callback
+          |
+          +--> FAILURE callback
+          |
+          v
+    monitoring.pipeline_runs
+
+The monitoring table records the outcome of each batch pipeline run so
+that pipeline health can later be exposed through FastAPI and the
+FinPulse dashboard.
 """
 
 from __future__ import annotations
@@ -50,6 +69,10 @@ from sqlalchemy import (
 )
 
 
+# =====================================================================
+# DATABASE CONFIGURATION
+# =====================================================================
+
 SOURCE_DB_URI = os.environ.get(
     "FINPULSE_SOURCE_DB_URI",
     "postgresql+psycopg2://finpulse:finpulse@postgres-source:5432/ecommerce",
@@ -61,6 +84,10 @@ WAREHOUSE_DB_URI = os.environ.get(
 )
 
 
+# =====================================================================
+# SOURCE TABLE CONFIGURATION
+# =====================================================================
+
 SOURCE_TABLES = [
     "customers",
     "products",
@@ -70,13 +97,206 @@ SOURCE_TABLES = [
 ]
 
 
+# =====================================================================
+# DBT CONFIGURATION
+# =====================================================================
+
+# Directory containing dbt_project.yml.
 DBT_PROJECT_DIR = "/opt/dbt/finpulse"
 
+# Directory containing profiles.yml.
+#
+# The dbt project and profiles directory are the same directory in the
+# current FinPulse container layout:
+#
+#     /opt/dbt/finpulse/
+#         dbt_project.yml
+#         profiles.yml
+#         models/
+#         seeds/
+#         tests/
+#         macros/
+#
+# This can still be overridden through the environment for future
+# deployments.
 DBT_PROFILES_DIR = os.environ.get(
     "DBT_PROFILES_DIR",
     "/opt/dbt/finpulse",
 )
 
+
+# =====================================================================
+# PIPELINE MONITORING
+# =====================================================================
+
+def get_failed_root_tasks(dag_run):
+    """
+    Identify the actual failed/root task(s) for a failed DAG run.
+
+    Airflow's failure callback context can contain a task instance that
+    is not the original failing task. For example, a downstream task
+    may be marked as ``upstream_failed`` after an earlier task fails.
+
+    This helper therefore inspects every task instance in the DAG run
+    and returns tasks whose state is explicitly ``failed``.
+
+    Tasks marked ``upstream_failed`` are intentionally excluded because
+    they did not fail themselves; they were skipped due to an upstream
+    failure.
+
+    Returns:
+        A comma-separated string containing the failed task IDs, or
+        ``None`` when no explicitly failed task can be identified.
+    """
+
+    failed_tasks = []
+
+    for task_instance in dag_run.get_task_instances():
+
+        if task_instance.state == "failed":
+            failed_tasks.append(task_instance.task_id)
+
+    if not failed_tasks:
+        return None
+
+    failed_tasks.sort()
+
+    return ", ".join(failed_tasks)
+
+
+def record_pipeline_success(context):
+    """
+    Record a successful FinPulse batch pipeline run.
+
+    Airflow invokes this callback after the DAG has completed
+    successfully.
+    """
+
+    dag_run = context["dag_run"]
+
+    engine = create_engine(
+        WAREHOUSE_DB_URI,
+        pool_pre_ping=True,
+    )
+
+    try:
+
+        with engine.begin() as conn:
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO monitoring.pipeline_runs (
+                        run_id,
+                        dag_id,
+                        status,
+                        started_at,
+                        finished_at,
+                        failed_task
+                    )
+                    VALUES (
+                        :run_id,
+                        :dag_id,
+                        'SUCCESS',
+                        :started_at,
+                        :finished_at,
+                        NULL
+                    )
+                    ON CONFLICT (run_id)
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        finished_at = EXCLUDED.finished_at,
+                        failed_task = EXCLUDED.failed_task,
+                        recorded_at = CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "run_id": dag_run.run_id,
+                    "dag_id": dag_run.dag_id,
+                    "started_at": dag_run.start_date,
+                    "finished_at": pendulum.now("UTC"),
+                },
+            )
+
+    finally:
+
+        engine.dispose()
+
+
+def record_pipeline_failure(context):
+    """
+    Record a failed FinPulse batch pipeline run.
+
+    Airflow invokes this callback when the DAG fails.
+
+    Instead of trusting ``context["task_instance"]`` as the failed
+    task, the callback inspects all task instances belonging to the DAG
+    run and records tasks whose state is explicitly ``failed``.
+
+    This prevents downstream ``upstream_failed`` tasks from being
+    incorrectly reported as the root failure.
+
+    Multiple explicitly failed tasks are stored as a comma-separated
+    list in the ``failed_task`` column.
+    """
+
+    dag_run = context["dag_run"]
+
+    failed_task = get_failed_root_tasks(dag_run)
+
+    engine = create_engine(
+        WAREHOUSE_DB_URI,
+        pool_pre_ping=True,
+    )
+
+    try:
+
+        with engine.begin() as conn:
+
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO monitoring.pipeline_runs (
+                        run_id,
+                        dag_id,
+                        status,
+                        started_at,
+                        finished_at,
+                        failed_task
+                    )
+                    VALUES (
+                        :run_id,
+                        :dag_id,
+                        'FAILED',
+                        :started_at,
+                        :finished_at,
+                        :failed_task
+                    )
+                    ON CONFLICT (run_id)
+                    DO UPDATE SET
+                        status = EXCLUDED.status,
+                        finished_at = EXCLUDED.finished_at,
+                        failed_task = EXCLUDED.failed_task,
+                        recorded_at = CURRENT_TIMESTAMP
+                    """
+                ),
+                {
+                    "run_id": dag_run.run_id,
+                    "dag_id": dag_run.dag_id,
+                    "started_at": dag_run.start_date,
+                    "finished_at": pendulum.now("UTC"),
+                    "failed_task": failed_task,
+                },
+            )
+
+    finally:
+
+        engine.dispose()
+
+
+# =====================================================================
+# AIRFLOW DAG
+# =====================================================================
 
 @dag(
     dag_id="finpulse_batch_etl",
@@ -92,15 +312,22 @@ DBT_PROFILES_DIR = os.environ.get(
         tz="UTC",
     ),
     catchup=False,
+    on_success_callback=record_pipeline_success,
+    on_failure_callback=record_pipeline_failure,
     tags=[
         "finpulse",
         "batch",
         "etl",
         "dbt",
         "lambda-architecture",
+        "monitoring",
     ],
 )
 def finpulse_batch_etl():
+
+    # =================================================================
+    # EXTRACT SOURCE -> RAW
+    # =================================================================
 
     @task
     def extract_source_to_raw():
@@ -108,15 +335,27 @@ def finpulse_batch_etl():
         Perform a full extract of the OLTP source tables into
         warehouse.raw.
 
-        SQLAlchemy Core is used directly rather than pandas.read_sql_table
-        or pandas.to_sql.
+        The raw tables are preserved between pipeline runs because
+        downstream dbt views depend on them.
 
-        PostgreSQL generated/computed columns are preserved in the raw
-        schema and excluded from INSERT statements.
+        On each run:
+
+            1. Reflect the source table.
+            2. Create the raw table if it does not exist.
+            3. TRUNCATE the existing raw table.
+            4. Load the complete source dataset.
+            5. Report loaded row counts.
+
+        SQLAlchemy Core is used directly rather than
+        pandas.read_sql_table or pandas.to_sql.
+
+        PostgreSQL generated/computed columns are preserved in the
+        warehouse schema and excluded from INSERT statements.
 
         Foreign-key constraints from the OLTP source are intentionally
-        removed from the raw tables. The source database owns referential
-        integrity, while the raw layer acts as an ingestion boundary.
+        removed from the raw tables. The source database owns
+        referential integrity, while the raw layer acts as an ingestion
+        boundary.
         """
 
         source_engine = create_engine(
@@ -134,7 +373,9 @@ def finpulse_batch_etl():
         row_counts: dict[str, int] = {}
 
         try:
+
             with source_engine.connect() as source_conn:
+
                 with warehouse_engine.begin() as warehouse_conn:
 
                     for table_name in SOURCE_TABLES:
@@ -155,21 +396,12 @@ def finpulse_batch_etl():
                         )
 
                         # -------------------------------------------------
-                        # Drop the existing raw table.
+                        # Build the warehouse representation.
                         #
-                        # Raw tables are rebuilt on every batch run so
-                        # that the development pipeline remains
-                        # deterministic.
-                        # -------------------------------------------------
-
-                        warehouse_conn.execute(
-                            text(
-                                f'DROP TABLE IF EXISTS raw."{table_name}"'
-                            )
-                        )
-
-                        # -------------------------------------------------
-                        # Recreate the raw table using the source schema.
+                        # The raw table is only created if it does not
+                        # already exist. This is important because dbt
+                        # staging and monitoring views depend on these
+                        # tables.
                         # -------------------------------------------------
 
                         warehouse_metadata = MetaData(
@@ -187,15 +419,6 @@ def finpulse_batch_etl():
                         # Do not copy OLTP foreign-key constraints into
                         # the raw warehouse layer.
                         #
-                        # Example:
-                        #
-                        # orders.customer_id
-                        #       -> customers.customer_id
-                        #
-                        # Creating orders independently would otherwise
-                        # require raw.customers to exist in the same
-                        # SQLAlchemy metadata object.
-                        #
                         # The source PostgreSQL database already enforces
                         # these relationships.
                         # -------------------------------------------------
@@ -203,27 +426,47 @@ def finpulse_batch_etl():
                         for constraint in list(
                             warehouse_table.constraints
                         ):
+
                             if isinstance(
                                 constraint,
                                 ForeignKeyConstraint,
                             ):
+
                                 warehouse_table.constraints.remove(
                                     constraint
                                 )
 
+                        # -------------------------------------------------
+                        # Create the raw table if it does not already
+                        # exist.
+                        #
+                        # checkfirst=True prevents PostgreSQL from
+                        # dropping/recreating a table that downstream
+                        # dbt views depend on.
+                        # -------------------------------------------------
+
                         warehouse_table.create(
-                            bind=warehouse_conn
+                            bind=warehouse_conn,
+                            checkfirst=True,
+                        )
+
+                        # -------------------------------------------------
+                        # Clear the existing raw data.
+                        #
+                        # TRUNCATE removes rows without removing the
+                        # table itself, so dependent dbt views remain
+                        # intact.
+                        # -------------------------------------------------
+
+                        warehouse_conn.execute(
+                            text(
+                                f'TRUNCATE TABLE raw."{table_name}"'
+                            )
                         )
 
                         # -------------------------------------------------
                         # Generated/computed columns must not be included
                         # in INSERT statements.
-                        #
-                        # Example:
-                        #
-                        # order_items.line_total
-                        #
-                        # PostgreSQL calculates this automatically.
                         # -------------------------------------------------
 
                         insertable_columns = {
@@ -291,6 +534,9 @@ def finpulse_batch_etl():
 
         return row_counts
 
+    # =================================================================
+    # REALTIME COMPACTION
+    # =================================================================
 
     @task
     def compact_realtime_layer():
@@ -352,7 +598,7 @@ def finpulse_batch_etl():
                 )
 
                 # -----------------------------------------------------
-                # Remove the staging rows after successful compaction.
+                # Remove staging rows after successful compaction.
                 # -----------------------------------------------------
 
                 conn.execute(
@@ -365,17 +611,17 @@ def finpulse_batch_etl():
                 )
 
                 print(
-                    "Realtime revenue staging table compacted successfully."
+                    "Realtime revenue staging table "
+                    "compacted successfully."
                 )
 
         finally:
 
             engine.dispose()
 
-
-    # -------------------------------------------------------------
-    # Batch pipeline
-    # -------------------------------------------------------------
+    # =================================================================
+    # BATCH PIPELINE TASKS
+    # =================================================================
 
     extracted = extract_source_to_raw()
 
@@ -403,7 +649,17 @@ def finpulse_batch_etl():
         ),
     )
 
-    extracted >> dbt_seed >> dbt_run >> dbt_test >> compact_realtime_layer()
+    realtime_compaction = compact_realtime_layer()
 
+    # =================================================================
+    # TASK DEPENDENCIES
+    # =================================================================
+
+    extracted >> dbt_seed >> dbt_run >> dbt_test >> realtime_compaction
+
+
+# =====================================================================
+# DAG REGISTRATION
+# =====================================================================
 
 finpulse_batch_etl()

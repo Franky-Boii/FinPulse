@@ -14,7 +14,7 @@ x-airflow-common: &airflow-common
     FINPULSE_SOURCE_DB_URI: postgresql+psycopg2://finpulse:finpulse@postgres-source:5432/ecommerce
     FINPULSE_WAREHOUSE_DB_URI: postgresql+psycopg2://finpulse:finpulse@postgres-warehouse:5432/warehouse
 
-    DBT_PROFILES_DIR: /opt/dbt/finpulse/finpulse
+    DBT_PROFILES_DIR: /opt/dbt/finpulse
 
   volumes:
     - ./airflow/dags:/opt/airflow/dags
