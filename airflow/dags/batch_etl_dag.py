@@ -40,7 +40,14 @@ import os
 import pendulum
 from airflow.decorators import dag, task
 from airflow.operators.bash import BashOperator
-from sqlalchemy import MetaData, Table, create_engine, insert, text
+from sqlalchemy import (
+    ForeignKeyConstraint,
+    MetaData,
+    Table,
+    create_engine,
+    insert,
+    text,
+)
 
 
 SOURCE_DB_URI = os.environ.get(
@@ -53,6 +60,7 @@ WAREHOUSE_DB_URI = os.environ.get(
     "postgresql+psycopg2://finpulse:finpulse@postgres-warehouse:5432/warehouse",
 )
 
+
 SOURCE_TABLES = [
     "customers",
     "products",
@@ -61,11 +69,12 @@ SOURCE_TABLES = [
     "payments",
 ]
 
+
 DBT_PROJECT_DIR = "/opt/dbt/finpulse"
 
 DBT_PROFILES_DIR = os.environ.get(
     "DBT_PROFILES_DIR",
-    "/opt/dbt",
+    "/opt/dbt/finpulse",
 )
 
 
@@ -102,8 +111,12 @@ def finpulse_batch_etl():
         SQLAlchemy Core is used directly rather than pandas.read_sql_table
         or pandas.to_sql.
 
-        This also handles PostgreSQL generated columns correctly by
-        excluding computed columns from INSERT statements.
+        PostgreSQL generated/computed columns are preserved in the raw
+        schema and excluded from INSERT statements.
+
+        Foreign-key constraints from the OLTP source are intentionally
+        removed from the raw tables. The source database owns referential
+        integrity, while the raw layer acts as an ingestion boundary.
         """
 
         source_engine = create_engine(
@@ -126,6 +139,14 @@ def finpulse_batch_etl():
 
                     for table_name in SOURCE_TABLES:
 
+                        print(
+                            f"Extracting source table: {table_name}"
+                        )
+
+                        # -------------------------------------------------
+                        # Reflect the source table from PostgreSQL.
+                        # -------------------------------------------------
+
                         source_table = Table(
                             table_name,
                             source_metadata,
@@ -135,6 +156,10 @@ def finpulse_batch_etl():
 
                         # -------------------------------------------------
                         # Drop the existing raw table.
+                        #
+                        # Raw tables are rebuilt on every batch run so
+                        # that the development pipeline remains
+                        # deterministic.
                         # -------------------------------------------------
 
                         warehouse_conn.execute(
@@ -155,6 +180,36 @@ def finpulse_batch_etl():
                             warehouse_metadata,
                             schema="raw",
                         )
+
+                        # -------------------------------------------------
+                        # IMPORTANT:
+                        #
+                        # Do not copy OLTP foreign-key constraints into
+                        # the raw warehouse layer.
+                        #
+                        # Example:
+                        #
+                        # orders.customer_id
+                        #       -> customers.customer_id
+                        #
+                        # Creating orders independently would otherwise
+                        # require raw.customers to exist in the same
+                        # SQLAlchemy metadata object.
+                        #
+                        # The source PostgreSQL database already enforces
+                        # these relationships.
+                        # -------------------------------------------------
+
+                        for constraint in list(
+                            warehouse_table.constraints
+                        ):
+                            if isinstance(
+                                constraint,
+                                ForeignKeyConstraint,
+                            ):
+                                warehouse_table.constraints.remove(
+                                    constraint
+                                )
 
                         warehouse_table.create(
                             bind=warehouse_conn
@@ -179,12 +234,19 @@ def finpulse_batch_etl():
 
                         rows = []
 
+                        # -------------------------------------------------
+                        # Extract rows from the source table.
+                        # -------------------------------------------------
+
                         result = source_conn.execute(
                             source_table.select()
                         )
 
                         for row in result:
-                            mapped_row = dict(row._mapping)
+
+                            mapped_row = dict(
+                                row._mapping
+                            )
 
                             filtered_row = {
                                 key: value
@@ -192,13 +254,16 @@ def finpulse_batch_etl():
                                 if key in insertable_columns
                             }
 
-                            rows.append(filtered_row)
+                            rows.append(
+                                filtered_row
+                            )
 
                         # -------------------------------------------------
                         # Bulk insert into raw.
                         # -------------------------------------------------
 
                         if rows:
+
                             warehouse_conn.execute(
                                 insert(warehouse_table),
                                 rows,
@@ -206,11 +271,26 @@ def finpulse_batch_etl():
 
                         row_counts[table_name] = len(rows)
 
+                        print(
+                            f"Loaded raw.{table_name}: "
+                            f"{len(rows)} rows"
+                        )
+
         finally:
+
             source_engine.dispose()
             warehouse_engine.dispose()
 
+        print(
+            "Source extraction completed successfully."
+        )
+
+        print(
+            f"Row counts: {row_counts}"
+        )
+
         return row_counts
+
 
     @task
     def compact_realtime_layer():
@@ -228,7 +308,13 @@ def finpulse_batch_etl():
         )
 
         try:
+
             with engine.begin() as conn:
+
+                # -----------------------------------------------------
+                # Update the authoritative realtime table using the
+                # latest staging record for each window.
+                # -----------------------------------------------------
 
                 conn.execute(
                     text(
@@ -239,16 +325,23 @@ def finpulse_batch_etl():
                             revenue,
                             updated_at
                         )
-                        SELECT DISTINCT ON (window_start)
+                        SELECT
                             window_start,
                             order_count,
                             revenue,
                             NOW()
-                        FROM realtime.revenue_by_minute_staging
-                        ORDER BY
-                            window_start,
-                            ingested_at DESC
-
+                        FROM (
+                            SELECT
+                                window_start,
+                                order_count,
+                                revenue,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY window_start
+                                    ORDER BY ingested_at DESC
+                                ) AS row_number
+                            FROM realtime.revenue_by_minute_staging
+                        ) latest
+                        WHERE row_number = 1
                         ON CONFLICT (window_start)
                         DO UPDATE SET
                             order_count = EXCLUDED.order_count,
@@ -257,6 +350,10 @@ def finpulse_batch_etl():
                         """
                     )
                 )
+
+                # -----------------------------------------------------
+                # Remove the staging rows after successful compaction.
+                # -----------------------------------------------------
 
                 conn.execute(
                     text(
@@ -267,8 +364,20 @@ def finpulse_batch_etl():
                     )
                 )
 
+                print(
+                    "Realtime revenue staging table compacted successfully."
+                )
+
         finally:
+
             engine.dispose()
+
+
+    # -------------------------------------------------------------
+    # Batch pipeline
+    # -------------------------------------------------------------
+
+    extracted = extract_source_to_raw()
 
     dbt_seed = BashOperator(
         task_id="dbt_seed",
@@ -293,8 +402,6 @@ def finpulse_batch_etl():
             f"dbt test --profiles-dir {DBT_PROFILES_DIR}"
         ),
     )
-
-    extracted = extract_source_to_raw()
 
     extracted >> dbt_seed >> dbt_run >> dbt_test >> compact_realtime_layer()
 
