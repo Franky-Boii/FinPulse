@@ -400,12 +400,16 @@ services:
 
     environment:
       WAREHOUSE_DB_URI: postgresql://finpulse:finpulse@postgres-warehouse:5432/warehouse
+      SOURCE_DB_URI: postgresql://finpulse:finpulse@postgres-source:5432/ecommerce
       REDIS_HOST: redis
+      REDIS_PORT: 6379
 
     ports:
       - "8000:8000"
 
     depends_on:
+      postgres-source:
+        condition: service_healthy
       postgres-warehouse:
         condition: service_healthy
       redis:
