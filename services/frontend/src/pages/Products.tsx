@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from 'react'
 import {
   Boxes,
@@ -6,6 +7,10 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { api, type TopProduct } from '../services/api'
+
+interface ProductsProps {
+  onOpenProduct: (productId: number) => void
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-ZA', {
@@ -19,7 +24,9 @@ function formatNumber(value: number) {
   return new Intl.NumberFormat('en-ZA').format(value)
 }
 
-export default function Products() {
+export default function Products({
+  onOpenProduct,
+}: ProductsProps) {
   const [products, setProducts] = useState<TopProduct[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -50,12 +57,12 @@ export default function Products() {
   const metrics = useMemo(() => {
     const totalRevenue = products.reduce(
       (sum, product) => sum + Number(product.revenue),
-      0
+      0,
     )
 
     const totalUnits = products.reduce(
       (sum, product) => sum + Number(product.units_sold),
-      0
+      0,
     )
 
     const topProduct = products[0]
@@ -158,7 +165,8 @@ export default function Products() {
           </h2>
 
           <p className="mt-1 text-sm text-slate-400">
-            Products ranked by revenue generated.
+            Products ranked by revenue generated. Select a product to view
+            detailed performance.
           </p>
         </div>
 
@@ -205,7 +213,11 @@ export default function Products() {
                 return (
                   <tr
                     key={product.product_id}
-                    className="border-b border-slate-900 transition hover:bg-slate-900/60"
+                    onClick={() =>
+                      onOpenProduct(product.product_id)
+                    }
+                    className="cursor-pointer border-b border-slate-900 transition hover:bg-slate-900/60"
+                    title={`View ${product.product_name} details`}
                   >
 
                     {/* Rank */}
@@ -229,7 +241,7 @@ export default function Products() {
                         </div>
 
                         <div>
-                          <p className="text-sm font-semibold text-white">
+                          <p className="text-sm font-semibold text-white transition group-hover:text-emerald-400">
                             {product.product_name}
                           </p>
 
@@ -275,7 +287,7 @@ export default function Products() {
                             style={{
                               width: `${Math.min(
                                 revenueShare,
-                                100
+                                100,
                               )}%`,
                             }}
                           />

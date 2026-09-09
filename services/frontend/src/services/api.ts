@@ -29,6 +29,41 @@ export interface TopProduct {
   revenue: number
 }
 
+export interface ProductDetails {
+  product: {
+    product_id: number
+    product_name: string
+    category: string
+    unit_price: number
+    created_at: string
+    updated_at: string
+  }
+
+  metrics: {
+    units_sold: number
+    revenue: number
+    order_count: number
+  }
+}
+
+export interface ProductSalesHistory {
+  order_date: string
+  units_sold: number
+  revenue: number
+  order_count: number
+}
+
+export interface ProductRecentOrder {
+  order_id: number
+  customer_id: number
+  customer_name: string
+  customer_email: string
+  order_date: string
+  order_status: string
+  quantity: number
+  revenue: number
+}
+
 export interface CustomerSummary {
   customer_count: number
   total_orders: number
@@ -150,6 +185,27 @@ export const api = {
 
   topProducts: () =>
     fetchApi<TopProduct[]>('/batch/top-products'),
+
+  productDetails: (productId: number) =>
+    fetchApi<ProductDetails>(
+      `/batch/products/${productId}`,
+    ),
+
+  productSalesHistory: (
+    productId: number,
+    limit = 30,
+  ) =>
+    fetchApi<ProductSalesHistory[]>(
+      `/batch/products/${productId}/sales-history?limit=${limit}`,
+    ),
+
+  productRecentOrders: (
+    productId: number,
+    limit = 20,
+  ) =>
+    fetchApi<ProductRecentOrder[]>(
+      `/batch/products/${productId}/orders?limit=${limit}`,
+    ),
 
   customersSummary: () =>
     fetchApi<CustomerSummary>('/batch/customers-summary'),

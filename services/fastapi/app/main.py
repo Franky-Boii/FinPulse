@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from .routers import batch
+from .routers import products
 from .routers import realtime
 from .routers import lambda_view
 from .routers import pipeline
@@ -17,6 +18,8 @@ app = FastAPI(
 
 
 app.include_router(batch.router)
+
+app.include_router(products.router)
 
 app.include_router(realtime.router)
 
