@@ -34,7 +34,7 @@ Dashboard
 
 This path provides **near-real-time analytics** such as revenue and top products.
 
-### Batch path
+### 📦 Batch path
 
 The same source data is periodically processed for more complete analytical reporting:
 
@@ -100,7 +100,7 @@ The batch layer is treated as the **authoritative analytical view**.
 
 ## What can FinPulse do?
 
-### Analytics
+### 📊 Analytics
 
 * Daily revenue
 * Top products
@@ -114,7 +114,7 @@ The batch layer is treated as the **authoritative analytical view**.
 * Real-time top products
 * Streaming aggregates
 
-### Drill-down
+### 🔎 Drill-down
 
 You can select a product and investigate:
 
@@ -130,7 +130,7 @@ Recent orders
 Customers
 ```
 
-### Pipeline monitoring
+### 🩺 Pipeline monitoring
 
 FinPulse also has a **Pipeline Health** page that checks the major components of the platform.
 
@@ -260,3 +260,5 @@ The project combines **batch processing, streaming, orchestration, data modellin
 ## License
 
 MIT License
+
+WTC-JVYEYCFT
