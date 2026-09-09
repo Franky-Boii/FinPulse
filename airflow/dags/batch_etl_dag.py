@@ -376,148 +376,158 @@ def finpulse_batch_etl():
 
             with source_engine.connect() as source_conn:
 
-                with warehouse_engine.begin() as warehouse_conn:
+                # Use one consistent PostgreSQL snapshot for the entire
+                # source extraction. This prevents parent/child tables from
+                # being extracted from different points in time while the
+                # OLTP system is receiving new events.
+                source_conn = source_conn.execution_options(
+                    isolation_level="REPEATABLE READ"
+                )
 
-                    for table_name in SOURCE_TABLES:
+                with source_conn.begin():
 
-                        print(
-                            f"Extracting source table: {table_name}"
-                        )
+                    with warehouse_engine.begin() as warehouse_conn:
 
-                        # -------------------------------------------------
-                        # Reflect the source table from PostgreSQL.
-                        # -------------------------------------------------
+                        for table_name in SOURCE_TABLES:
 
-                        source_table = Table(
-                            table_name,
-                            source_metadata,
-                            schema="public",
-                            autoload_with=source_engine,
-                        )
+                            print(
+                                f"Extracting source table: {table_name}"
+                            )
 
-                        # -------------------------------------------------
-                        # Build the warehouse representation.
-                        #
-                        # The raw table is only created if it does not
-                        # already exist. This is important because dbt
-                        # staging and monitoring views depend on these
-                        # tables.
-                        # -------------------------------------------------
+                            # -------------------------------------------------
+                            # Reflect the source table from PostgreSQL.
+                            # -------------------------------------------------
 
-                        warehouse_metadata = MetaData(
-                            schema="raw"
-                        )
+                            source_table = Table(
+                                table_name,
+                                source_metadata,
+                                schema="public",
+                                autoload_with=source_engine,
+                            )
 
-                        warehouse_table = source_table.to_metadata(
-                            warehouse_metadata,
-                            schema="raw",
-                        )
+                            # -------------------------------------------------
+                            # Build the warehouse representation.
+                            #
+                            # The raw table is only created if it does not
+                            # already exist. This is important because dbt
+                            # staging and monitoring views depend on these
+                            # tables.
+                            # -------------------------------------------------
 
-                        # -------------------------------------------------
-                        # IMPORTANT:
-                        #
-                        # Do not copy OLTP foreign-key constraints into
-                        # the raw warehouse layer.
-                        #
-                        # The source PostgreSQL database already enforces
-                        # these relationships.
-                        # -------------------------------------------------
+                            warehouse_metadata = MetaData(
+                                schema="raw"
+                            )
 
-                        for constraint in list(
-                            warehouse_table.constraints
-                        ):
+                            warehouse_table = source_table.to_metadata(
+                                warehouse_metadata,
+                                schema="raw",
+                            )
 
-                            if isinstance(
-                                constraint,
-                                ForeignKeyConstraint,
+                            # -------------------------------------------------
+                            # IMPORTANT:
+                            #
+                            # Do not copy OLTP foreign-key constraints into
+                            # the raw warehouse layer.
+                            #
+                            # The source PostgreSQL database already enforces
+                            # these relationships.
+                            # -------------------------------------------------
+
+                            for constraint in list(
+                                warehouse_table.constraints
                             ):
 
-                                warehouse_table.constraints.remove(
-                                    constraint
-                                )
+                                if isinstance(
+                                    constraint,
+                                    ForeignKeyConstraint,
+                                ):
 
-                        # -------------------------------------------------
-                        # Create the raw table if it does not already
-                        # exist.
-                        #
-                        # checkfirst=True prevents PostgreSQL from
-                        # dropping/recreating a table that downstream
-                        # dbt views depend on.
-                        # -------------------------------------------------
+                                    warehouse_table.constraints.remove(
+                                        constraint
+                                    )
 
-                        warehouse_table.create(
-                            bind=warehouse_conn,
-                            checkfirst=True,
-                        )
+                            # -------------------------------------------------
+                            # Create the raw table if it does not already
+                            # exist.
+                            #
+                            # checkfirst=True prevents PostgreSQL from
+                            # dropping/recreating a table that downstream
+                            # dbt views depend on.
+                            # -------------------------------------------------
 
-                        # -------------------------------------------------
-                        # Clear the existing raw data.
-                        #
-                        # TRUNCATE removes rows without removing the
-                        # table itself, so dependent dbt views remain
-                        # intact.
-                        # -------------------------------------------------
-
-                        warehouse_conn.execute(
-                            text(
-                                f'TRUNCATE TABLE raw."{table_name}"'
-                            )
-                        )
-
-                        # -------------------------------------------------
-                        # Generated/computed columns must not be included
-                        # in INSERT statements.
-                        # -------------------------------------------------
-
-                        insertable_columns = {
-                            column.name
-                            for column in warehouse_table.columns
-                            if column.computed is None
-                        }
-
-                        rows = []
-
-                        # -------------------------------------------------
-                        # Extract rows from the source table.
-                        # -------------------------------------------------
-
-                        result = source_conn.execute(
-                            source_table.select()
-                        )
-
-                        for row in result:
-
-                            mapped_row = dict(
-                                row._mapping
+                            warehouse_table.create(
+                                bind=warehouse_conn,
+                                checkfirst=True,
                             )
 
-                            filtered_row = {
-                                key: value
-                                for key, value in mapped_row.items()
-                                if key in insertable_columns
-                            }
-
-                            rows.append(
-                                filtered_row
-                            )
-
-                        # -------------------------------------------------
-                        # Bulk insert into raw.
-                        # -------------------------------------------------
-
-                        if rows:
+                            # -------------------------------------------------
+                            # Clear the existing raw data.
+                            #
+                            # TRUNCATE removes rows without removing the
+                            # table itself, so dependent dbt views remain
+                            # intact.
+                            # -------------------------------------------------
 
                             warehouse_conn.execute(
-                                insert(warehouse_table),
-                                rows,
+                                text(
+                                    f'TRUNCATE TABLE raw."{table_name}"'
+                                )
                             )
 
-                        row_counts[table_name] = len(rows)
+                            # -------------------------------------------------
+                            # Generated/computed columns must not be included
+                            # in INSERT statements.
+                            # -------------------------------------------------
 
-                        print(
-                            f"Loaded raw.{table_name}: "
-                            f"{len(rows)} rows"
-                        )
+                            insertable_columns = {
+                                column.name
+                                for column in warehouse_table.columns
+                                if column.computed is None
+                            }
+
+                            rows = []
+
+                            # -------------------------------------------------
+                            # Extract rows from the source table.
+                            # -------------------------------------------------
+
+                            result = source_conn.execute(
+                                source_table.select()
+                            )
+
+                            for row in result:
+
+                                mapped_row = dict(
+                                    row._mapping
+                                )
+
+                                filtered_row = {
+                                    key: value
+                                    for key, value in mapped_row.items()
+                                    if key in insertable_columns
+                                }
+
+                                rows.append(
+                                    filtered_row
+                                )
+
+                            # -------------------------------------------------
+                            # Bulk insert into raw.
+                            # -------------------------------------------------
+
+                            if rows:
+
+                                warehouse_conn.execute(
+                                    insert(warehouse_table),
+                                    rows,
+                                )
+
+                            row_counts[table_name] = len(rows)
+
+                            print(
+                                f"Loaded raw.{table_name}: "
+                                f"{len(rows)} rows"
+                            )
 
         finally:
 
