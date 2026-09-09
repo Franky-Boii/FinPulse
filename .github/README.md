@@ -1,127 +1,265 @@
 # FinPulse
 
-**A Lambda-architecture data platform for e-commerce order analytics.**
+**A real-time and batch e-commerce analytics platform built with a Lambda architecture.**
 
-FinPulse is a portfolio data engineering project built to demonstrate a
-complete **Lambda architecture** end to end: a live OLTP source, Change
-Data Capture, a stream-processing speed layer, a batch/ELT layer built
-with Airflow + dbt, and a serving API that merges both views for the
-client.
+FinPulse is a Data Engineering project that takes e-commerce data from a PostgreSQL database, processes it in **real time and in batch**, and presents the results through a web dashboard.
 
-The goal throughout was to use real, industry-standard tools the way they're actually used in production, not toy stand-ins.
+It demonstrates how technologies such as **Debezium, Redpanda, Spark, Airflow, dbt, Redis, FastAPI, and React** can work together in one data platform.
 
 ---
 
-## Why "Lambda architecture"?
+## How does it work?
 
-A Lambda architecture answers one question: *how do you get both
-correctness and low latency out of the same data platform?*
+FinPulse has two main data paths.
 
-- The **batch layer** re-processes the full history on a schedule. It's
-  slow (in FinPulse: hourly) but authoritative — if anything in the
-  platform is "the truth," it's this layer.
-- The **speed layer** processes only what's arrived since the last
-  batch run, in near real time. It's fast (seconds) but approximate —
-  it can miss late data, double-count on retries, or use simpler logic
-  than the batch layer.
-- The **serving layer** merges both: batch totals for everything the
-  batch layer has already seen, plus the speed layer's view of
-  "just now," so a client gets one coherent, low-latency, eventually-
-  correct answer.
+### ⚡ Real-time path
 
-FinPulse implements all three layers on a simulated e-commerce orders
-business — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the
-full data-flow diagram and component breakdown.
+When something changes in the source database:
 
----
-
-## Tech stack
-
-| Concern | Tool | Why |
-|---|---|---|
-| OLTP source | PostgreSQL | Logical replication makes it a natural CDC source |
-| Change Data Capture | Debezium | Industry-standard CDC connector, reads the Postgres WAL directly — no dual writes, no polling |
-| Event transport | Redpanda | Kafka-API compatible, single binary, far lighter to run locally than a full Kafka + ZooKeeper cluster |
-| Stream processing | Spark Structured Streaming | Windowed aggregation with watermarking, exactly the pattern used in production streaming pipelines |
-| Low-latency store | Redis | Sub-millisecond reads for the speed layer's output |
-| Orchestration | Apache Airflow | Schedules and sequences the batch layer; DAGs express task dependencies explicitly |
-| Transformation | dbt | SQL-based, testable, version-controlled transformations; staging → marts layering |
-| Analytical warehouse | PostgreSQL (separate instance) | Hosts `raw` / `staging` (dbt) / `marts` / `realtime` schemas |
-| Serving API | FastAPI | Exposes batch, speed, and merged endpoints |
-| Containerization | Docker Compose | One command spins up all 12 services |
-
----
-
-## Architecture at a glance
-
+```text
+PostgreSQL
+    ↓
+Debezium
+    ↓
+Redpanda
+    ↓
+Spark Streaming
+    ↓
+Redis
+    ↓
+FastAPI
+    ↓
+Dashboard
 ```
-                         ┌─────────────────────┐
- order-generator ───────►│  postgres-source     │  (OLTP, logical replication on)
- (simulates the app)      │  customers/products/ │
-                          │  orders/order_items/  │
-                          │  payments             │
-                          └──────────┬───────────┘
-                                     │ WAL
-                                     ▼
-                          ┌─────────────────────┐
-                          │  Debezium Connect     │──► CDC events
-                          └──────────┬───────────┘
-                                     ▼
-                          ┌─────────────────────┐
-                          │  Redpanda (Kafka API) │
-                          └──────┬───────┬───────┘
-                                 │       │
-                 SPEED LAYER     │       │      BATCH LAYER
-                 ────────────    ▼       │      ───────────
-                 ┌───────────────────┐   │      ┌──────────────────────┐
-                 │ Spark Structured   │   │      │ Airflow (hourly DAG)  │
-                 │ Streaming          │   │      │  1. extract source    │
-                 │ (windowed          │   │      │     -> warehouse.raw  │
-                 │  aggregates)       │   │      │  2. dbt seed          │
-                 └────┬──────────┬────┘   │      │  3. dbt run           │
-                      │          │        │      │     (staging->marts)  │
-                      ▼          ▼        │      │  4. dbt test          │
-                  ┌───────┐ ┌─────────┐   │      │  5. compact realtime  │
-                  │ Redis │ │warehouse│◄──┘      │     staging table     │
-                  │       │ │.realtime│          └──────────┬───────────┘
-                  └───┬───┘ └────┬────┘                     │
-                      │          │                           ▼
-                      │          │                 warehouse.marts.*
-                      │          │            (dim_customers, dim_products,
-                      │          │             fact_orders, mart_daily_revenue,
-                      │          │             mart_top_products)
-                      │          │                           │
-                      ▼          ▼                           ▼
-                 ┌─────────────────────────────────────────────┐
-                 │            FastAPI serving layer              │
-                 │  /realtime/*   /batch/*   /lambda/* (merged)   │
-                 └─────────────────────────────────────────────┘
+
+This path provides **near-real-time analytics** such as revenue and top products.
+
+### 📦 Batch path
+
+The same source data is periodically processed for more complete analytical reporting:
+
+```text
+PostgreSQL
+    ↓
+Airflow
+    ↓
+Warehouse
+    ↓
+dbt
+    ↓
+Analytical Marts
+    ↓
+FastAPI
+    ↓
+Dashboard
+```
+
+The batch layer is treated as the **authoritative analytical view**.
+
+---
+
+## Architecture
+
+```text
+                    ┌──────────────────┐
+                    │  E-commerce Data │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │   PostgreSQL     │
+                    │    OLTP Source   │
+                    └────────┬─────────┘
+                             │
+                ┌────────────┴────────────┐
+                │                         │
+             Real-time                  Batch
+                │                         │
+                ▼                         ▼
+            Debezium                   Airflow
+                │                         │
+                ▼                         ▼
+            Redpanda                 Warehouse
+                │                         │
+                ▼                         ▼
+             Spark                       dbt
+                │                         │
+                ▼                         ▼
+             Redis                     Marts
+                │                         │
+                └────────────┬────────────┘
+                             │
+                             ▼
+                         FastAPI
+                             │
+                             ▼
+                     React Dashboard
 ```
 
 ---
 
-## Repository layout
+## What can FinPulse do?
 
+### 📊 Analytics
+
+* Daily revenue
+* Top products
+* Customer metrics
+* Customer distribution by region
+* Product performance
+
+### ⚡ Real-time analytics
+
+* Revenue by minute
+* Real-time top products
+* Streaming aggregates
+
+### 🔎 Drill-down
+
+You can select a product and investigate:
+
+```text
+Product
+  ↓
+Performance
+  ↓
+Sales history
+  ↓
+Recent orders
+  ↓
+Customers
 ```
-finpulse/
-├── docker-compose.yml          # all 12 services wired together
-├── docker/                     # init SQL for source + warehouse DBs
+
+### 🩺 Pipeline monitoring
+
+FinPulse also has a **Pipeline Health** page that checks the major components of the platform.
+
+---
+
+## Technology stack
+
+| Technology         | Purpose                         |
+| ------------------ | ------------------------------- |
+| PostgreSQL         | Source database and warehouse   |
+| Debezium           | Change Data Capture             |
+| Redpanda           | Event streaming                 |
+| Spark              | Real-time processing            |
+| Redis              | Real-time data serving          |
+| Airflow            | Batch orchestration             |
+| dbt                | Data transformation and testing |
+| FastAPI            | API / serving layer             |
+| React + TypeScript | Dashboard                       |
+| Docker Compose     | Local infrastructure            |
+
+---
+
+## Running FinPulse
+
+### 1. Clone the project
+
+```bash
+git clone <your-repository-url>
+cd FinPulse
+```
+
+### 2. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+### 3. Start the platform
+
+```bash
+make up
+```
+
+### 4. Register the CDC connector
+
+```bash
+make register-connector
+```
+
+### 5. Open the dashboard
+
+```text
+http://localhost:5173
+```
+
+---
+
+## Useful interfaces
+
+| Service          | URL                        |
+| ---------------- | -------------------------- |
+| Dashboard        | http://localhost:5173      |
+| FastAPI          | http://localhost:8000      |
+| API Docs         | http://localhost:8000/docs |
+| Airflow          | http://localhost:8080      |
+| Redpanda Console | http://localhost:8085      |
+
+---
+
+## Project structure
+
+```text
+FinPulse/
+├── airflow/          # Batch orchestration
+├── dbt/              # Data transformations
+├── docker/           # Database initialization
+├── docs/             # Project documentation
 ├── services/
-│   ├── order_generator/        # simulates live app traffic
-│   └── fastapi/                # serving layer (batch/realtime/lambda routers)
+│   ├── fastapi/      # API
+│   ├── frontend/     # React dashboard
+│   └── order_generator/
 ├── streaming/
-│   ├── spark_jobs/              # Structured Streaming speed-layer job
-│   └── debezium/                 # CDC connector config
-├── airflow/
-│   └── dags/                    # batch_etl_dag.py, bootstrap_cdc_dag.py
-├── dbt/finpulse/
-│   ├── models/staging/          # 1:1 cleaned views over raw
-│   ├── models/marts/             # star schema + business aggregates
-│   └── seeds/                    # reference/lookup data
-├── scripts/                     # helper scripts (connector registration, etc.)
-├── docs/                        # architecture, data model, runbook, backlog
-└── .github/                     # issue templates, CI workflow
+│   ├── debezium/     # CDC configuration
+│   └── spark_jobs/   # Streaming jobs
+├── docker-compose.yml
+├── Makefile
+└── README.md
 ```
+
+---
+
+## Documentation
+
+For people who want to understand the project in more detail:
+
+* [Architecture](docs/ARCHITECTURE.md) — how the platform works
+* [Data Model](docs/DATA_MODULE.md) — source and warehouse data
+* [Runbook](docs/RUNBOOK.md) — how to operate and troubleshoot it
+* [Backlog](docs/BACKLOGS.md) — completed work and future improvements
+
+---
+
+## Why I built FinPulse
+
+FinPulse was built to demonstrate practical Data Engineering skills across the full data lifecycle:
+
+```text
+Ingest
+  ↓
+Capture
+  ↓
+Stream
+  ↓
+Transform
+  ↓
+Store
+  ↓
+Serve
+  ↓
+Visualize
+```
+
+The project combines **batch processing, streaming, orchestration, data modelling, data quality, APIs, and analytics** into one working platform.
+
+---
+
+## License
+
+MIT License
 
 ---
 
