@@ -2,28 +2,257 @@
 
 :root {
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 
-  color: #e5e7eb;
+  color: #e2e8f0;
   background: #080b12;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
-body,
-#root {
-  margin: 0;
-  min-width: 320px;
-  min-height: 100vh;
+html {
+  background: #080b12;
 }
 
 body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      circle at 80% 0%,
+      rgba(16, 185, 129, 0.035),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 20% 100%,
+      rgba(59, 130, 246, 0.025),
+      transparent 35%
+    ),
+    #080b12;
+}
+
+button {
+  font: inherit;
+}
+
+button:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.6);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   FINPULSE APP
+   ============================================================ */
+
+.finpulse-app {
+  background:
+    linear-gradient(
+      135deg,
+      rgba(16, 185, 129, 0.018),
+      transparent 35%
+    ),
+    #080b12;
+}
+
+/* ============================================================
+   LOGO
+   ============================================================ */
+
+.logo-mark {
+  display: flex;
+  height: 38px;
+  width: 38px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(52, 211, 153, 0.15);
+  border-radius: 12px;
+  color: #34d399;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(52, 211, 153, 0.16),
+      rgba(16, 185, 129, 0.04)
+    );
+  box-shadow:
+    0 0 20px rgba(16, 185, 129, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+
+.nav-item {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.nav-item:hover {
+  color: #e2e8f0;
+  background: rgba(30, 41, 59, 0.45);
+  border-color: rgba(148, 163, 184, 0.05);
+}
+
+.nav-item:active {
+  transform: scale(0.99);
+}
+
+.nav-item-active {
+  color: #6ee7b7;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(16, 185, 129, 0.12),
+      rgba(16, 185, 129, 0.035)
+    );
+  border-color: rgba(52, 211, 153, 0.08);
+  box-shadow:
+    inset 2px 0 0 rgba(52, 211, 153, 0.8),
+    0 4px 20px rgba(16, 185, 129, 0.025);
+}
+
+.nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================================================
+   SYSTEM STATUS
+   ============================================================ */
+
+.status-card {
+  border: 1px solid rgba(52, 211, 153, 0.1);
+  border-radius: 12px;
+  background:
+    linear-gradient(
+      135deg,
+      rgba(16, 185, 129, 0.07),
+      rgba(16, 185, 129, 0.015)
+    );
+  padding: 14px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 8px 30px rgba(0, 0, 0, 0.12);
+}
+
+.status-dot {
+  display: block;
+  height: 7px;
+  width: 7px;
+  border-radius: 999px;
+  background: #34d399;
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.75);
+}
+
+/* ============================================================
+   HEADER
+   ============================================================ */
+
+.header-refresh {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.7);
+  padding: 8px 11px;
+  color: #cbd5e1;
+  font-size: 11px;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.header-refresh:hover {
+  border-color: rgba(52, 211, 153, 0.25);
+  background: rgba(16, 185, 129, 0.07);
+  color: #6ee7b7;
+}
+
+/* ============================================================
+   BACKGROUND GLOWS
+   ============================================================ */
+
+.dashboard-glow {
+  pointer-events: none;
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(80px);
+  opacity: 0.25;
+}
+
+.dashboard-glow-one {
+  right: 5%;
+  top: -100px;
+  height: 250px;
+  width: 250px;
+  background: rgba(16, 185, 129, 0.07);
+}
+
+.dashboard-glow-two {
+  left: 20%;
+  top: 500px;
+  height: 200px;
+  width: 200px;
+  background: rgba(59, 130, 246, 0.04);
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
   background: #080b12;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #1e293b;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+/* ============================================================
+   SELECTION
+   ============================================================ */
+
+::selection {
+  background: rgba(52, 211, 153, 0.2);
+  color: #ecfdf5;
 }
