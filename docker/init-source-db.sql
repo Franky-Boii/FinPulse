@@ -82,9 +82,9 @@ INSERT INTO products (product_name, category, unit_price) VALUES
 ON CONFLICT DO NOTHING;
 
 INSERT INTO customers (full_name, email, country, signup_date) VALUES
-    ('Thandiwe Mokoena', 'thandiwe.m@example.com', 'South Africa', CURRENT_DATE - INTERVAL '120 days'),
-    ('Liam O''Connor', 'liam.oc@example.com', 'Ireland', CURRENT_DATE - INTERVAL '90 days'),
-    ('Aisha Bello', 'aisha.b@example.com', 'Nigeria', CURRENT_DATE - INTERVAL '75 days'),
-    ('Chen Wei', 'chen.wei@example.com', 'Singapore', CURRENT_DATE - INTERVAL '60 days'),
-    ('Sipho Ndlovu', 'sipho.n@example.com', 'South Africa', CURRENT_DATE - INTERVAL '45 days')
+    ('Thandiwe Mokoena', 'thandiwe.m@gmail.com', 'South Africa', CURRENT_DATE - INTERVAL '120 days'),
+    ('Liam O''Connor', 'liam.oc@outlook.com', 'Ireland', CURRENT_DATE - INTERVAL '90 days'),
+    ('Aisha Bello', 'aisha.b@yahoo.com', 'Nigeria', CURRENT_DATE - INTERVAL '75 days'),
+    ('Chen Wei', 'chen.wei@icloud.com', 'Singapore', CURRENT_DATE - INTERVAL '60 days'),
+    ('Sipho Ndlovu', 'sipho.n@proton.me', 'South Africa', CURRENT_DATE - INTERVAL '45 days')
 ON CONFLICT DO NOTHING;

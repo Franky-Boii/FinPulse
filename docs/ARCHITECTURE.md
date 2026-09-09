@@ -2132,7 +2132,7 @@ This keeps the frontend API calls clean while allowing the backend to remain ind
 
 FinPulse includes a simulated transactional workload generator.
 
-Container:
+Container:git commit -a -m "md files to be updated"
 
 ```text
 finpulse-order-generator
@@ -2145,7 +2145,7 @@ postgres-source:5432
 ```
 
 Database:
-
+git commit -a -m "md files to be updated"
 ```text
 ecommerce
 ```
@@ -2166,7 +2166,7 @@ This provides a live data source for the CDC and streaming pipelines.
 
 Orders can move through the following statuses:
 
-```text
+```textgit commit -a -m "md files to be updated"
 placed
    │
    ▼
@@ -2177,7 +2177,7 @@ shipped
 ```
 
 Orders can also become:
-
+git commit -a -m "md files to be updated"
 ```text
 cancelled
 ```
@@ -2402,7 +2402,7 @@ PostgreSQL enforces:
 
 ## Staging layer
 
-dbt validates:
+dbt validates:git commit -a -m "md files to be updated"
 
 * identifiers
 * required fields
