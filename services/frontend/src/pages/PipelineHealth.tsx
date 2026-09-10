@@ -4,12 +4,25 @@ import {
   CheckCircle2,
   Clock3,
   Database,
+  Gauge,
   RefreshCw,
   Server,
   XCircle,
   Zap,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import {
   api,
@@ -17,6 +30,12 @@ import {
   type PipelineHealth as PipelineHealthResponse,
   type PipelineStatus,
 } from '../services/api'
+
+const STATUS_COLORS: Record<PipelineStatus, string> = {
+  healthy: '#34d399',
+  degraded: '#fbbf24',
+  unhealthy: '#f87171',
+}
 
 function statusConfig(status: PipelineStatus) {
   switch (status) {
@@ -143,6 +162,31 @@ function PipelineHealth() {
     return () => window.clearInterval(interval)
   }, [loadHealth])
 
+  const latencyData = useMemo(
+    () =>
+      (health?.checks ?? [])
+        .filter((check) => check.latency_ms !== null)
+        .map((check) => ({
+          name:
+            check.name.length > 14
+              ? `${check.name.slice(0, 14)}…`
+              : check.name,
+          latency: check.latency_ms as number,
+          status: check.status,
+        })),
+    [health],
+  )
+
+  const statusMix = useMemo(() => {
+    if (!health) return []
+
+    return [
+      { name: 'Healthy', value: health.summary.healthy, status: 'healthy' as PipelineStatus },
+      { name: 'Degraded', value: health.summary.degraded, status: 'degraded' as PipelineStatus },
+      { name: 'Unhealthy', value: health.summary.unhealthy, status: 'unhealthy' as PipelineStatus },
+    ].filter((entry) => entry.value > 0)
+  }, [health])
+
   if (loading) {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
@@ -185,7 +229,6 @@ function PipelineHealth() {
   }
 
   const overall = statusConfig(health.status)
-
   return (
     <div className="space-y-8">
 
@@ -263,6 +306,148 @@ function PipelineHealth() {
             {formatTimestamp(health.checked_at)}
           </div>
 
+        </div>
+      </section>
+
+      {/* Latency + status mix */}
+      <section className="grid gap-6 xl:grid-cols-2">
+        <div className="rounded-2xl border border-slate-800 bg-[#0b0f17] p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">
+                Component Latency
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Response time of each health check.
+              </p>
+            </div>
+            <Gauge className="h-5 w-5 text-slate-500" />
+          </div>
+
+          {latencyData.length > 0 ? (
+            <div className="h-[240px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={latencyData}
+                  layout="vertical"
+                  margin={{ left: 8, right: 16 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke="#1e293b"
+                    horizontal={false}
+                  />
+
+                  <XAxis
+                    type="number"
+                    stroke="#64748b"
+                    fontSize={11}
+                    tickFormatter={(value) => `${value}ms`}
+                  />
+
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    stroke="#64748b"
+                    fontSize={11}
+                    width={110}
+                  />
+
+                  <Tooltip
+                    contentStyle={{
+                      background: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: '10px',
+                      color: '#fff',
+                    }}
+                    formatter={(value) => [`${value} ms`, 'Latency']}
+                    cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+                  />
+
+                  <Bar dataKey="latency" radius={[0, 6, 6, 0]}>
+                    {latencyData.map((entry) => (
+                      <Cell
+                        key={entry.name}
+                        fill={STATUS_COLORS[entry.status]}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">
+              No latency data reported yet.
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-800 bg-[#0b0f17] p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">
+                Status Mix
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Component health distribution right now.
+              </p>
+            </div>
+            <Server className="h-5 w-5 text-slate-500" />
+          </div>
+
+          <div className="flex flex-col items-center gap-6 sm:flex-row">
+            <div className="h-[180px] w-[180px] shrink-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={statusMix}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={78}
+                    paddingAngle={2}
+                    stroke="none"
+                  >
+                    {statusMix.map((entry) => (
+                      <Cell
+                        key={entry.name}
+                        fill={STATUS_COLORS[entry.status]}
+                      />
+                    ))}
+                  </Pie>
+
+                  <Tooltip
+                    contentStyle={{
+                      background: '#0f172a',
+                      border: '1px solid #334155',
+                      borderRadius: '10px',
+                      color: '#fff',
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="w-full space-y-3">
+              {statusMix.map((entry) => (
+                <div
+                  key={entry.name}
+                  className="flex items-center justify-between text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ background: STATUS_COLORS[entry.status] }}
+                    />
+                    <span className="text-slate-300">{entry.name}</span>
+                  </div>
+                  <span className="text-slate-500">
+                    {entry.value} / {health.summary.total}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -11,11 +13,22 @@ import {
 import { BarChart3, DollarSign, ShoppingCart, Package } from 'lucide-react'
 import { api, type DailyRevenue, type LambdaView } from '../services/api'
 
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-ZA', {
     style: 'currency',
     currency: 'ZAR',
     maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function formatCompactCurrency(value: number) {
+  return new Intl.NumberFormat('en-ZA', {
+    style: 'currency',
+    currency: 'ZAR',
+    notation: 'compact',
+    maximumFractionDigits: 1,
   }).format(value)
 }
 
@@ -41,7 +54,7 @@ export default function Revenue() {
       setError(null)
 
       const [dailyRevenue, lambdaView] = await Promise.all([
-        api.dailyRevenue(),
+        api.dailyRevenue(90),
         api.lambdaView(),
       ])
 
@@ -95,6 +108,34 @@ export default function Revenue() {
       aov: orders > 0 ? revenue / orders : 0,
     }
   }, [revenueData])
+
+  const weekdayAverages = useMemo(() => {
+    const buckets = WEEKDAY_LABELS.map((label) => ({
+      label,
+      total: 0,
+      count: 0,
+    }))
+
+    revenueData.forEach((day) => {
+      const weekday = new Date(`${day.order_date}T00:00:00`).getDay()
+      buckets[weekday].total += Number(day.revenue)
+      buckets[weekday].count += 1
+    })
+
+    return buckets.map((bucket) => ({
+      label: bucket.label,
+      average: bucket.count > 0 ? bucket.total / bucket.count : 0,
+    }))
+  }, [revenueData])
+
+  const ordersChartData = useMemo(
+    () =>
+      sortedRevenue.map((day) => ({
+        date: day.order_date,
+        orders: day.order_count,
+      })),
+    [sortedRevenue],
+  )
 
   if (loading) {
     return (
@@ -215,7 +256,7 @@ export default function Revenue() {
           </p>
         </div>
 
-        <div className="h-[360px]">
+        <div className="h-[320px]">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={sortedRevenue}>
               <defs>
@@ -226,8 +267,8 @@ export default function Revenue() {
                   x2="0"
                   y2="1"
                 >
-                  <stop offset="0%" stopOpacity={0.35} />
-                  <stop offset="100%" stopOpacity={0} />
+                  <stop offset="0%" stopColor="#34d399" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
                 </linearGradient>
               </defs>
 
@@ -243,6 +284,7 @@ export default function Revenue() {
                 tickLine={false}
                 axisLine={false}
                 tick={{ fontSize: 12 }}
+                minTickGap={24}
               />
 
               <YAxis
@@ -255,6 +297,12 @@ export default function Revenue() {
               />
 
               <Tooltip
+                contentStyle={{
+                  background: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: '10px',
+                  color: '#fff',
+                }}
                 formatter={(value) => [
                   formatCurrency(Number(value)),
                   'Revenue',
@@ -274,6 +322,7 @@ export default function Revenue() {
               <Area
                 type="monotone"
                 dataKey="revenue"
+                stroke="#34d399"
                 strokeWidth={2}
                 fill="url(#revenueGradient)"
               />
@@ -281,6 +330,95 @@ export default function Revenue() {
           </ResponsiveContainer>
         </div>
       </section>
+
+      {/* Orders trend + weekday pattern */}
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-white">
+              Orders Trend
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Daily order volume across the batch period.
+            </p>
+          </div>
+
+          <div className="h-[220px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={ordersChartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={formatDate}
+                  stroke="#64748b"
+                  fontSize={11}
+                  minTickGap={24}
+                />
+
+                <YAxis stroke="#64748b" fontSize={11} />
+
+                <Tooltip
+                  contentStyle={{
+                    background: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                  }}
+                  labelFormatter={(label) => formatDate(String(label))}
+                  formatter={(value) => [formatNumber(Number(value)), 'Orders']}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+                />
+
+                <Bar dataKey="orders" fill="#22d3ee" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-white">
+              Average Revenue by Weekday
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Average daily revenue grouped by day of week.
+            </p>
+          </div>
+
+          <div className="h-[220px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={weekdayAverages}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+
+                <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
+
+                <YAxis
+                  stroke="#64748b"
+                  fontSize={11}
+                  tickFormatter={formatCompactCurrency}
+                />
+
+                <Tooltip
+                  contentStyle={{
+                    background: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [
+                    formatCurrency(Number(value)),
+                    'Avg revenue',
+                  ]}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+                />
+
+                <Bar dataKey="average" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      </div>
 
       {/* Daily Breakdown */}
       <section className="rounded-2xl border border-slate-800 bg-slate-950/60">

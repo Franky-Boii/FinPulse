@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
   Clock3,
@@ -9,12 +9,31 @@ import {
   ShoppingCart,
   Zap,
 } from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import {
   api,
   type RealtimeRevenue,
   type RealtimeTopProduct,
 } from '../services/api'
+
+const HISTORY_LIMIT = 20
+
+interface HistoryPoint {
+  time: string
+  revenue: number
+  order_count: number
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-ZA', {
@@ -59,6 +78,9 @@ export default function Realtime() {
 
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
 
+  const [history, setHistory] = useState<HistoryPoint[]>([])
+  const lastWindowRef = useRef<string | null>(null)
+
   async function loadRealtimeData(initial = false) {
     try {
       if (initial) {
@@ -79,6 +101,26 @@ export default function Realtime() {
       setProducts(productData)
 
       setLastUpdated(new Date())
+
+      if (
+        revenueData.window_start &&
+        revenueData.window_start !== lastWindowRef.current
+      ) {
+        lastWindowRef.current = revenueData.window_start
+
+        setHistory((prev) => {
+          const next = [
+            ...prev,
+            {
+              time: formatWindow(revenueData.window_start),
+              revenue: revenueData.revenue,
+              order_count: revenueData.order_count,
+            },
+          ]
+
+          return next.slice(-HISTORY_LIMIT)
+        })
+      }
     } catch (err) {
       setError(
         err instanceof Error
@@ -277,6 +319,121 @@ export default function Realtime() {
         />
 
       </div>
+
+      {/* =========================
+          Live Pulse
+          ========================= */}
+
+      <section className="rounded-2xl border border-slate-800 bg-[#0b0f17] p-6">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold text-white">
+              Live Revenue Pulse
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Revenue per streaming window, captured as it arrives.
+            </p>
+          </div>
+          <Activity className="h-5 w-5 text-slate-600" />
+        </div>
+
+        {history.length > 1 ? (
+          <div className="h-[180px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={history}>
+                <defs>
+                  <linearGradient id="pulseFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.35} />
+                    <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+
+                <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
+
+                <YAxis
+                  stroke="#64748b"
+                  fontSize={11}
+                  tickFormatter={(value) => formatCurrency(Number(value))}
+                  width={90}
+                />
+
+                <Tooltip
+                  contentStyle={{
+                    background: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [
+                    formatCurrency(Number(value)),
+                    'Revenue',
+                  ]}
+                />
+
+                <Area
+                  type="monotone"
+                  dataKey="revenue"
+                  stroke="#22d3ee"
+                  fill="url(#pulseFill)"
+                  strokeWidth={2}
+                  isAnimationActive={false}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <div className="flex h-[180px] items-center justify-center text-sm text-slate-600">
+            Collecting streaming windows — the pulse fills in as new data
+            arrives.
+          </div>
+        )}
+      </section>
+
+      {history.length > 1 && (
+        <section className="rounded-2xl border border-slate-800 bg-[#0b0f17] p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold text-white">
+                Orders per Window
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Order volume across recent streaming windows.
+              </p>
+            </div>
+            <ShoppingCart className="h-5 w-5 text-slate-600" />
+          </div>
+
+          <div className="h-[160px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={history}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+
+                <XAxis dataKey="time" stroke="#64748b" fontSize={11} />
+
+                <YAxis stroke="#64748b" fontSize={11} />
+
+                <Tooltip
+                  contentStyle={{
+                    background: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [
+                    formatNumber(Number(value)),
+                    'Orders',
+                  ]}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+                />
+
+                <Bar dataKey="order_count" fill="#a78bfa" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
+      )}
 
       {/* =========================
           Main Content

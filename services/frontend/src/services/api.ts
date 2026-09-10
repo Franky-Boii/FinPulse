@@ -180,8 +180,8 @@ export const api = {
 
   /* ---------- Batch Layer ---------- */
 
-  dailyRevenue: () =>
-    fetchApi<DailyRevenue[]>('/batch/daily-revenue'),
+  dailyRevenue: (limit = 90) =>
+    fetchApi<DailyRevenue[]>(`/batch/daily-revenue?limit=${limit}`),
 
   topProducts: () =>
     fetchApi<TopProduct[]>('/batch/top-products'),

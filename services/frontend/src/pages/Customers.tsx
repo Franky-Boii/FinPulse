@@ -6,6 +6,18 @@ import {
   TrendingUp,
   Users,
 } from 'lucide-react'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 import {
   api,
@@ -14,11 +26,29 @@ import {
   type CustomersByRegion,
 } from '../services/api'
 
+const REGION_COLORS = [
+  '#22d3ee',
+  '#34d399',
+  '#a78bfa',
+  '#fbbf24',
+  '#fb7185',
+  '#60a5fa',
+]
+
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-ZA', {
     style: 'currency',
     currency: 'ZAR',
     maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function formatCompactCurrency(value: number) {
+  return new Intl.NumberFormat('en-ZA', {
+    style: 'currency',
+    currency: 'ZAR',
+    notation: 'compact',
+    maximumFractionDigits: 1,
   }).format(value)
 }
 
@@ -66,6 +96,41 @@ export default function Customers() {
     () => regions.reduce((sum, region) => sum + region.customer_count, 0),
     [regions],
   )
+
+  const regionDonut = useMemo(
+    () =>
+      regions.map((region, index) => ({
+        name: region.region,
+        value: region.customer_count,
+        color: REGION_COLORS[index % REGION_COLORS.length],
+      })),
+    [regions],
+  )
+
+  const spendDistribution = useMemo(() => {
+    const buckets = [
+      { label: '< R1k', max: 1_000, count: 0 },
+      { label: 'R1k–5k', max: 5_000, count: 0 },
+      { label: 'R5k–15k', max: 15_000, count: 0 },
+      { label: 'R15k–40k', max: 40_000, count: 0 },
+      { label: 'R40k+', max: Infinity, count: 0 },
+    ]
+
+    customers.forEach((customer) => {
+      const bucket = buckets.find(
+        (b) => Number(customer.total_order_value) <= b.max,
+      )
+
+      if (bucket) {
+        bucket.count += 1
+      }
+    })
+
+    return buckets.map((bucket) => ({
+      label: bucket.label,
+      count: bucket.count,
+    }))
+  }, [customers])
 
   if (loading) {
     return (
@@ -163,8 +228,45 @@ export default function Customers() {
             <Globe2 className="h-5 w-5 text-slate-600" />
           </div>
 
+          {regionDonut.length > 0 && (
+            <div className="mt-6 flex justify-center">
+              <div className="h-[160px] w-[160px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={regionDonut}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={46}
+                      outerRadius={72}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {regionDonut.map((entry) => (
+                        <Cell key={entry.name} fill={entry.color} />
+                      ))}
+                    </Pie>
+
+                    <Tooltip
+                      contentStyle={{
+                        background: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: '10px',
+                        color: '#fff',
+                      }}
+                      formatter={(value, name) => [
+                        formatNumber(Number(value)),
+                        String(name),
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
           <div className="mt-6 space-y-5">
-            {regions.map((region) => {
+            {regions.map((region, index) => {
               const percentage =
                 totalRegionCustomers > 0
                   ? (region.customer_count / totalRegionCustomers) * 100
@@ -173,7 +275,14 @@ export default function Customers() {
               return (
                 <div key={region.region}>
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-sm text-slate-300">
+                    <span className="flex items-center gap-2 text-sm text-slate-300">
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{
+                          background:
+                            REGION_COLORS[index % REGION_COLORS.length],
+                        }}
+                      />
                       {region.region}
                     </span>
 
@@ -185,8 +294,12 @@ export default function Customers() {
 
                   <div className="h-2 overflow-hidden rounded-full bg-slate-800">
                     <div
-                      className="h-full rounded-full bg-cyan-400"
-                      style={{ width: `${percentage}%` }}
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${percentage}%`,
+                        background:
+                          REGION_COLORS[index % REGION_COLORS.length],
+                      }}
                     />
                   </div>
                 </div>
@@ -270,6 +383,56 @@ export default function Customers() {
             </table>
           </div>
         </div>
+      </section>
+
+      {/* Customer value distribution */}
+      <section className="rounded-2xl border border-slate-800 bg-[#0b0f17] p-6">
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold text-white">
+              Customer Value Distribution
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Number of customers grouped by total lifetime spend.
+            </p>
+          </div>
+          <ShoppingBag className="h-5 w-5 text-slate-600" />
+        </div>
+
+        <div className="h-[220px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={spendDistribution}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+
+              <XAxis dataKey="label" stroke="#64748b" fontSize={11} />
+
+              <YAxis stroke="#64748b" fontSize={11} />
+
+              <Tooltip
+                contentStyle={{
+                  background: '#0f172a',
+                  border: '1px solid #334155',
+                  borderRadius: '10px',
+                  color: '#fff',
+                }}
+                formatter={(value) => [
+                  formatNumber(Number(value)),
+                  'Customers',
+                ]}
+                cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+              />
+
+              <Bar dataKey="count" fill="#34d399" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        <p className="mt-4 text-[11px] text-slate-600">
+          Buckets are based on each customer&rsquo;s total order value
+          ({formatCompactCurrency(0)}–{formatCompactCurrency(1000)},{' '}
+          {formatCompactCurrency(1000)}–{formatCompactCurrency(5000)}, and so
+          on).
+        </p>
       </section>
     </div>
   )
