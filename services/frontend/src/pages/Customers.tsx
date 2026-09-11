@@ -25,6 +25,10 @@ import {
   type CustomerSummary,
   type CustomersByRegion,
 } from '../services/api'
+import {
+  computeRegionShares,
+  computeSpendDistribution,
+} from '../lib/dashboardMath'
 
 const REGION_COLORS = [
   '#22d3ee',
@@ -92,8 +96,8 @@ export default function Customers() {
     loadCustomers()
   }, [])
 
-  const totalRegionCustomers = useMemo(
-    () => regions.reduce((sum, region) => sum + region.customer_count, 0),
+  const regionShares = useMemo(
+    () => computeRegionShares(regions),
     [regions],
   )
 
@@ -107,30 +111,10 @@ export default function Customers() {
     [regions],
   )
 
-  const spendDistribution = useMemo(() => {
-    const buckets = [
-      { label: '< R1k', max: 1_000, count: 0 },
-      { label: 'R1k–5k', max: 5_000, count: 0 },
-      { label: 'R5k–15k', max: 15_000, count: 0 },
-      { label: 'R15k–40k', max: 40_000, count: 0 },
-      { label: 'R40k+', max: Infinity, count: 0 },
-    ]
-
-    customers.forEach((customer) => {
-      const bucket = buckets.find(
-        (b) => Number(customer.total_order_value) <= b.max,
-      )
-
-      if (bucket) {
-        bucket.count += 1
-      }
-    })
-
-    return buckets.map((bucket) => ({
-      label: bucket.label,
-      count: bucket.count,
-    }))
-  }, [customers])
+  const spendDistribution = useMemo(
+    () => computeSpendDistribution(customers),
+    [customers],
+  )
 
   if (loading) {
     return (
@@ -266,45 +250,38 @@ export default function Customers() {
           )}
 
           <div className="mt-6 space-y-5">
-            {regions.map((region, index) => {
-              const percentage =
-                totalRegionCustomers > 0
-                  ? (region.customer_count / totalRegionCustomers) * 100
-                  : 0
-
-              return (
-                <div key={region.region}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm text-slate-300">
-                      <span
-                        className="h-2 w-2 rounded-full"
-                        style={{
-                          background:
-                            REGION_COLORS[index % REGION_COLORS.length],
-                        }}
-                      />
-                      {region.region}
-                    </span>
-
-                    <span className="text-xs text-slate-500">
-                      {formatNumber(region.customer_count)} ·{' '}
-                      {percentage.toFixed(1)}%
-                    </span>
-                  </div>
-
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className="h-full rounded-full"
+            {regionShares.map((region, index) => (
+              <div key={region.region}>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-sm text-slate-300">
+                    <span
+                      className="h-2 w-2 rounded-full"
                       style={{
-                        width: `${percentage}%`,
                         background:
                           REGION_COLORS[index % REGION_COLORS.length],
                       }}
                     />
-                  </div>
+                    {region.region}
+                  </span>
+
+                  <span className="text-xs text-slate-500">
+                    {formatNumber(region.customer_count)} ·{' '}
+                    {region.percent.toFixed(1)}%
+                  </span>
                 </div>
-              )
-            })}
+
+                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${region.percent}%`,
+                      background:
+                        REGION_COLORS[index % REGION_COLORS.length],
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 

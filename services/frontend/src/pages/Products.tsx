@@ -1,12 +1,34 @@
-
 import { useEffect, useMemo, useState } from 'react'
 import {
   Boxes,
   DollarSign,
   Package,
+  PieChart as PieIcon,
   TrendingUp,
 } from 'lucide-react'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 import { api, type TopProduct } from '../services/api'
+import { computeCategoryBreakdown } from '../lib/dashboardMath'
+
+const CATEGORY_COLORS = [
+  '#34d399',
+  '#22d3ee',
+  '#a78bfa',
+  '#fbbf24',
+  '#fb7185',
+  '#60a5fa',
+]
 
 interface ProductsProps {
   onOpenProduct: (productId: number) => void
@@ -17,6 +39,15 @@ function formatCurrency(value: number) {
     style: 'currency',
     currency: 'ZAR',
     maximumFractionDigits: 0,
+  }).format(value)
+}
+
+function formatCompactCurrency(value: number) {
+  return new Intl.NumberFormat('en-ZA', {
+    style: 'currency',
+    currency: 'ZAR',
+    notation: 'compact',
+    maximumFractionDigits: 1,
   }).format(value)
 }
 
@@ -74,6 +105,31 @@ export default function Products({
       productCount: products.length,
     }
   }, [products])
+
+  const categoryBreakdown = useMemo(
+    () => computeCategoryBreakdown(products),
+    [products],
+  )
+
+  const categoryTotal = categoryBreakdown.reduce(
+    (sum, entry) => sum + entry.value,
+    0,
+  )
+
+  const productChartData = useMemo(
+    () =>
+      [...products]
+        .sort((a, b) => Number(b.revenue) - Number(a.revenue))
+        .slice(0, 8)
+        .map((product) => ({
+          name:
+            product.product_name.length > 16
+              ? `${product.product_name.slice(0, 16)}…`
+              : product.product_name,
+          revenue: Number(product.revenue),
+        })),
+    [products],
+  )
 
   if (loading) {
     return (
@@ -154,6 +210,156 @@ export default function Products({
           icon={<TrendingUp size={18} />}
         />
 
+      </div>
+
+      {/* Category donut + product revenue bar chart */}
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">
+                Revenue by Category
+              </h2>
+              <p className="mt-1 text-sm text-slate-400">
+                Share of revenue across tracked categories.
+              </p>
+            </div>
+            <PieIcon className="h-5 w-5 text-slate-500" />
+          </div>
+
+          {categoryBreakdown.length > 0 ? (
+            <div className="flex flex-col items-center gap-6 sm:flex-row">
+              <div className="h-[190px] w-[190px] shrink-0">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={categoryBreakdown}
+                      dataKey="value"
+                      nameKey="category"
+                      innerRadius={52}
+                      outerRadius={80}
+                      paddingAngle={2}
+                      stroke="none"
+                    >
+                      {categoryBreakdown.map((entry, index) => (
+                        <Cell
+                          key={entry.category}
+                          fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]}
+                        />
+                      ))}
+                    </Pie>
+
+                    <Tooltip
+                      contentStyle={{
+                        background: '#0f172a',
+                        border: '1px solid #334155',
+                        borderRadius: '10px',
+                        color: '#fff',
+                      }}
+                      formatter={(value, name) => [
+                        formatCurrency(Number(value)),
+                        String(name),
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="w-full space-y-3">
+                {categoryBreakdown.map((entry, index) => {
+                  const pct =
+                    categoryTotal > 0
+                      ? (entry.value / categoryTotal) * 100
+                      : 0
+
+                  return (
+                    <div
+                      key={entry.category}
+                      className="flex items-center justify-between text-sm"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{
+                            background:
+                              CATEGORY_COLORS[index % CATEGORY_COLORS.length],
+                          }}
+                        />
+                        <span className="text-slate-300">
+                          {entry.category}
+                        </span>
+                      </div>
+
+                      <span className="text-slate-500">
+                        {pct.toFixed(1)}%
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">No category data yet.</p>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-950/60 p-6">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-white">
+              Revenue by Product
+            </h2>
+            <p className="mt-1 text-sm text-slate-400">
+              Top products ranked by revenue.
+            </p>
+          </div>
+
+          <div className="h-[260px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={productChartData}
+                layout="vertical"
+                margin={{ left: 8, right: 16 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke="#1e293b"
+                  horizontal={false}
+                />
+
+                <XAxis
+                  type="number"
+                  stroke="#64748b"
+                  fontSize={11}
+                  tickFormatter={formatCompactCurrency}
+                />
+
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  stroke="#64748b"
+                  fontSize={11}
+                  width={110}
+                />
+
+                <Tooltip
+                  contentStyle={{
+                    background: '#0f172a',
+                    border: '1px solid #334155',
+                    borderRadius: '10px',
+                    color: '#fff',
+                  }}
+                  formatter={(value) => [
+                    formatCurrency(Number(value)),
+                    'Revenue',
+                  ]}
+                  cursor={{ fill: 'rgba(148, 163, 184, 0.06)' }}
+                />
+
+                <Bar dataKey="revenue" fill="#34d399" radius={[0, 6, 6, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </section>
       </div>
 
       {/* Product Ranking */}

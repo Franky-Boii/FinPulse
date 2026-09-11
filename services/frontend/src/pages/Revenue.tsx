@@ -12,8 +12,10 @@ import {
 } from 'recharts'
 import { BarChart3, DollarSign, ShoppingCart, Package } from 'lucide-react'
 import { api, type DailyRevenue, type LambdaView } from '../services/api'
-
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+import {
+  computeRevenueSummary,
+  computeWeekdayAverages,
+} from '../lib/dashboardMath'
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat('en-ZA', {
@@ -86,47 +88,21 @@ export default function Revenue() {
   )
 
   const totals = useMemo(() => {
-    const revenue = revenueData.reduce(
-      (sum, day) => sum + Number(day.revenue),
-      0
-    )
-
-    const orders = revenueData.reduce(
-      (sum, day) => sum + Number(day.order_count),
-      0
-    )
-
-    const units = revenueData.reduce(
-      (sum, day) => sum + Number(day.units_sold),
-      0
-    )
+    const { totalRevenue, totalOrders, totalUnits, avgOrderValue } =
+      computeRevenueSummary(revenueData)
 
     return {
-      revenue,
-      orders,
-      units,
-      aov: orders > 0 ? revenue / orders : 0,
+      revenue: totalRevenue,
+      orders: totalOrders,
+      units: totalUnits,
+      aov: avgOrderValue,
     }
   }, [revenueData])
 
-  const weekdayAverages = useMemo(() => {
-    const buckets = WEEKDAY_LABELS.map((label) => ({
-      label,
-      total: 0,
-      count: 0,
-    }))
-
-    revenueData.forEach((day) => {
-      const weekday = new Date(`${day.order_date}T00:00:00`).getDay()
-      buckets[weekday].total += Number(day.revenue)
-      buckets[weekday].count += 1
-    })
-
-    return buckets.map((bucket) => ({
-      label: bucket.label,
-      average: bucket.count > 0 ? bucket.total / bucket.count : 0,
-    }))
-  }, [revenueData])
+  const weekdayAverages = useMemo(
+    () => computeWeekdayAverages(revenueData),
+    [revenueData],
+  )
 
   const ordersChartData = useMemo(
     () =>

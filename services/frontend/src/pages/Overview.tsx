@@ -33,13 +33,19 @@ import {
   type CustomersByRegion,
   type DailyRevenue,
   type LambdaView,
-  type PipelineCheck,
   type PipelineHealth,
-  type PipelineStatus,
   type RealtimeRevenue,
   type RealtimeTopProduct,
   type TopProduct,
 } from '../services/api'
+import {
+  computeCategoryBreakdown,
+  computeRegionShares,
+  computeRevenueSummary,
+  deriveLayerStatus,
+  percentChange,
+  type PipelineStatus,
+} from '../lib/dashboardMath'
 
 type RangeKey = '7d' | '30d' | '90d'
 
@@ -75,29 +81,6 @@ function formatTime(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function layerStatus(
-  checks: PipelineCheck[] | undefined,
-  keywords: string[],
-): PipelineStatus {
-  if (!checks || checks.length === 0) {
-    return 'healthy'
-  }
-
-  const matched = checks.filter((check) =>
-    keywords.some((keyword) => check.name.includes(keyword)),
-  )
-
-  if (matched.some((check) => check.status === 'unhealthy')) {
-    return 'unhealthy'
-  }
-
-  if (matched.some((check) => check.status === 'degraded')) {
-    return 'degraded'
-  }
-
-  return 'healthy'
 }
 
 export default function Overview() {
@@ -168,73 +151,50 @@ export default function Overview() {
   const latestDay = revenue[revenue.length - 1]
   const previousDay = revenue[revenue.length - 2]
 
-  const revenueChange =
-    previousDay && previousDay.revenue > 0
-      ? ((latestDay.revenue - previousDay.revenue) / previousDay.revenue) *
-        100
-      : 0
+  const revenueChange = percentChange(
+    latestDay?.revenue ?? 0,
+    previousDay?.revenue,
+  )
 
-  const ordersChange =
-    previousDay && previousDay.order_count > 0
-      ? ((latestDay.order_count - previousDay.order_count) /
-          previousDay.order_count) *
-        100
-      : 0
+  const ordersChange = percentChange(
+    latestDay?.order_count ?? 0,
+    previousDay?.order_count,
+  )
 
-  const summary = useMemo(() => {
-    const totalRevenue = rangedRevenue.reduce((sum, d) => sum + d.revenue, 0)
-    const totalOrders = rangedRevenue.reduce(
-      (sum, d) => sum + d.order_count,
-      0,
-    )
-    const totalUnits = rangedRevenue.reduce(
-      (sum, d) => sum + d.units_sold,
-      0,
-    )
-    const avgOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0
+  const summary = useMemo(
+    () => computeRevenueSummary(rangedRevenue),
+    [rangedRevenue],
+  )
 
-    return { totalRevenue, totalOrders, totalUnits, avgOrderValue }
-  }, [rangedRevenue])
-
-  const categoryBreakdown = useMemo(() => {
-    const totals = new Map<string, number>()
-
-    products.forEach((product) => {
-      totals.set(
-        product.category,
-        (totals.get(product.category) ?? 0) + product.revenue,
-      )
-    })
-
-    return Array.from(totals.entries())
-      .map(([category, value]) => ({ category, value }))
-      .sort((a, b) => b.value - a.value)
-  }, [products])
+  const categoryBreakdown = useMemo(
+    () => computeCategoryBreakdown(products),
+    [products],
+  )
 
   const categoryTotal = categoryBreakdown.reduce(
     (sum, entry) => sum + entry.value,
     0,
   )
 
-  const totalRegionCustomers = regions.reduce(
-    (sum, region) => sum + region.customer_count,
-    0,
+  const regionShares = useMemo(
+    () => computeRegionShares(regions),
+    [regions],
   )
 
-  const batchStatus = layerStatus(pipeline?.checks, [
+  const batchStatus = deriveLayerStatus(pipeline?.checks, [
     'Airflow',
     'dbt',
     'Warehouse',
   ])
 
-  const speedStatus = layerStatus(pipeline?.checks, [
+  const speedStatus = deriveLayerStatus(pipeline?.checks, [
     'Spark',
     'Redpanda',
     'Debezium',
     'Redis',
   ])
 
-  const servingStatus = layerStatus(pipeline?.checks, ['FastAPI'])
+  const servingStatus = deriveLayerStatus(pipeline?.checks, ['FastAPI'])
 
   const customers = 6334
   const productCount = 10
@@ -764,34 +724,27 @@ export default function Overview() {
           </div>
 
           <div className="space-y-5">
-            {regions.map((region) => {
-              const pct =
-                totalRegionCustomers > 0
-                  ? (region.customer_count / totalRegionCustomers) * 100
-                  : 0
+            {regionShares.map((region) => (
+              <div key={region.region}>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm text-slate-300">
+                    {region.region}
+                  </span>
 
-              return (
-                <div key={region.region}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-sm text-slate-300">
-                      {region.region}
-                    </span>
-
-                    <span className="text-xs text-slate-500">
-                      {formatNumber(region.customer_count)} &middot;{' '}
-                      {pct.toFixed(1)}%
-                    </span>
-                  </div>
-
-                  <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                    <div
-                      className="h-full rounded-full bg-cyan-400"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
+                  <span className="text-xs text-slate-500">
+                    {formatNumber(region.customer_count)} &middot;{' '}
+                    {region.percent.toFixed(1)}%
+                  </span>
                 </div>
-              )
-            })}
+
+                <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                  <div
+                    className="h-full rounded-full bg-cyan-400"
+                    style={{ width: `${region.percent}%` }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </section>
       </div>
