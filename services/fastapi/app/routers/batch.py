@@ -6,6 +6,34 @@ from ..db import engine
 router = APIRouter(prefix="/batch", tags=["batch layer"])
 
 
+def summarize_customers(
+    customer_count: int,
+    total_orders: int,
+    total_revenue: float,
+    total_units: int,
+) -> dict[str, int | float]:
+    """
+    Pure aggregation step for the customer summary endpoint: turns raw
+    totals into the derived averages, guarding against division by zero
+    when there are no customers yet.
+
+    Kept separate from customers_summary() so it can be unit tested
+    without a running Postgres warehouse.
+    """
+    return {
+        "customer_count": customer_count,
+        "total_orders": total_orders,
+        "total_revenue": total_revenue,
+        "total_units": total_units,
+        "average_customer_spend": (
+            total_revenue / customer_count if customer_count > 0 else 0
+        ),
+        "average_orders_per_customer": (
+            total_orders / customer_count if customer_count > 0 else 0
+        ),
+    }
+
+
 @router.get("/daily-revenue")
 def daily_revenue(limit: int = 30):
     """Authoritative daily revenue from the dbt mart."""
@@ -64,27 +92,12 @@ def customers_summary():
             """)
         ).mappings().one()
 
-    customer_count = int(row["customer_count"])
-    total_orders = int(row["total_orders"])
-    total_revenue = float(row["total_revenue"])
-    total_units = int(row["total_units"])
-
-    return {
-        "customer_count": customer_count,
-        "total_orders": total_orders,
-        "total_revenue": total_revenue,
-        "total_units": total_units,
-        "average_customer_spend": (
-            total_revenue / customer_count
-            if customer_count > 0
-            else 0
-        ),
-        "average_orders_per_customer": (
-            total_orders / customer_count
-            if customer_count > 0
-            else 0
-        ),
-    }
+    return summarize_customers(
+        customer_count=int(row["customer_count"]),
+        total_orders=int(row["total_orders"]),
+        total_revenue=float(row["total_revenue"]),
+        total_units=int(row["total_units"]),
+    )
 
 
 @router.get("/customer-metrics")

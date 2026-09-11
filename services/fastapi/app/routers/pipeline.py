@@ -635,6 +635,42 @@ def check_fastapi():
     )
 
 
+def summarize_checks(checks: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Pure aggregation step: turns a list of individual check results (each
+    shaped like the output of healthy()/degraded()/unhealthy()) into an
+    overall status and a count summary.
+
+    Kept separate from pipeline_health() so it can be unit tested without
+    touching the database, Redis, Airflow, Debezium, or Redpanda.
+
+    Overall status rule: any unhealthy check makes the whole platform
+    unhealthy; otherwise any degraded check makes it degraded; otherwise
+    it's healthy. An empty check list is treated as healthy — no checks
+    ran, so there's nothing reporting a problem.
+    """
+    healthy_count = sum(1 for check in checks if check["status"] == "healthy")
+    degraded_count = sum(1 for check in checks if check["status"] == "degraded")
+    unhealthy_count = sum(1 for check in checks if check["status"] == "unhealthy")
+
+    if unhealthy_count > 0:
+        overall_status = "unhealthy"
+    elif degraded_count > 0:
+        overall_status = "degraded"
+    else:
+        overall_status = "healthy"
+
+    return {
+        "status": overall_status,
+        "summary": {
+            "total": len(checks),
+            "healthy": healthy_count,
+            "degraded": degraded_count,
+            "unhealthy": unhealthy_count,
+        },
+    }
+
+
 @router.get("/health")
 def pipeline_health():
     checks = [
@@ -650,39 +686,11 @@ def pipeline_health():
         check_order_generator(),
     ]
 
-    healthy_count = sum(
-        1
-        for check in checks
-        if check["status"] == "healthy"
-    )
-
-    degraded_count = sum(
-        1
-        for check in checks
-        if check["status"] == "degraded"
-    )
-
-    unhealthy_count = sum(
-        1
-        for check in checks
-        if check["status"] == "unhealthy"
-    )
-
-    if unhealthy_count > 0:
-        overall_status = "unhealthy"
-    elif degraded_count > 0:
-        overall_status = "degraded"
-    else:
-        overall_status = "healthy"
+    aggregate = summarize_checks(checks)
 
     return {
-        "status": overall_status,
+        "status": aggregate["status"],
         "checked_at": now_utc(),
-        "summary": {
-            "total": len(checks),
-            "healthy": healthy_count,
-            "degraded": degraded_count,
-            "unhealthy": unhealthy_count,
-        },
+        "summary": aggregate["summary"],
         "checks": checks,
     }
